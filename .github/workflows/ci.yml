@@ -1,8 +1,9 @@
 name: CI
 
 # Contrôles requis par le ruleset de main (README, « Sécurité du dépôt »).
-# À ADAPTER : ajouter les jobs de tests du projet, et leur nom aux contrôles
-# requis du ruleset.
+# La batterie statique du projet (tests/verifier.sh) tourne dans ce même job :
+# le nom du contrôle requis par le ruleset ne change pas. Le build de l'image
+# Cicero (1 à 2 h, GPU) ne peut pas tourner sur un runner GitHub.
 
 on:
   pull_request:
@@ -52,3 +53,5 @@ jobs:
             echo "::error::fichier sensible versionné (voir la liste ci-dessus)"; exit 1
           fi
           echo "Aucun fichier sensible versionné."
+      - name: Batterie statique du projet
+        run: bash tests/verifier.sh

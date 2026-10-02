@@ -251,3 +251,9 @@ CLAUDE.local.md
 Thumbs.db
 desktop.ini
 .DS_Store
+
+# --- Diplomacy_online ---
+# Arbres d'amont clonés et patchés par install.sh (jamais versionnés ici)
+/amont/
+# Secrets et état local
+.env
