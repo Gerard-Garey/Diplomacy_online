@@ -4,6 +4,8 @@ Politique appliquée par la session principale quand elle consulte `architect` o
 
 **Point de départ, pas politique figée.** Les valeurs ci-dessous sont celles du modèle de dépôt. Chaque projet créé à partir du modèle les adapte à son domaine, à son architecture et à ses risques (passages **À ADAPTER**, § 9), puis les réévalue à mesure qu'il évolue (§ 8).
 
+**Deux experts.** Partout où ce document écrit `expert`, lire celui des deux dont relève la question : `expert-cicero` (moteur stratégique, promesses, règles du jeu) ou `expert-webdip` (plateforme, API, installation). Une question à cheval se pose aux deux, séparément ; un désaccord entre eux est un critère d'escalade (§ 4).
+
 ## 1. Principes
 
 1. **Opus par défaut, Fable rarement.** Fable est réservé aux cas du § 4.1, ou à l'accord du mainteneur ; il n'est jamais un réflexe devant une difficulté.
@@ -19,8 +21,8 @@ Le paramètre `model` d'un appel `Agent` l'emporte sur le `model` de la fiche ; 
 | Fiche | Modèle servi | Effort | `maxTurns` | Usage |
 |---|---|---|---|---|
 | `architect`, `expert` | `opus` | `medium` | 40 | routine (§ 3) |
-| `architect-approfondi`, `expert-approfondi` | `opus` | `high` | 80 | jugement (§ 3) |
-| `architect-approfondi`, `expert-approfondi` appelées avec `model: "fable"` | Fable (fiche : `opus`, l'appel l'emporte) | `high` | 80 | cas du § 4.1, ou accord du mainteneur |
+| `architect-approfondi`, `expert-cicero-approfondi`, `expert-webdip-approfondi` | `opus` | `high` | 80 | jugement (§ 3) |
+| `architect-approfondi`, `expert-cicero-approfondi`, `expert-webdip-approfondi` appelées avec `model: "fable"` | Fable (fiche : `opus`, l'appel l'emporte) | `high` | 80 | cas du § 4.1, ou accord du mainteneur |
 
 - Les fiches `-approfondi` sont **générées** par `bash .claude/outils/fiches_jumelles.sh` à partir de la fiche de base : seul le frontmatter diffère (nom, description, effort, `maxTurns`). Ne jamais les modifier à la main ; la CI vérifie la concordance (`--verifier`). La liste des rôles dédoublés est la variable `ROLES` du script (**À ADAPTER** : un expert dupliqué y est ajouté).
 - Fable en `xhigh` ou `max` : jamais sans accord explicite du mainteneur (il faudrait alors une troisième fiche, à créer sur décision). Fable en `medium` (fiche de base appelée avec `model: "fable"`) : sur indication explicite du mainteneur seulement.
@@ -34,7 +36,7 @@ Le paramètre `model` d'un appel `Agent` l'emporte sur le `model` de la fiche ; 
 | Rôle | Mission | Signaux observables | Départ | Preuves attendues | Suite | Arrêt |
 |---|---|---|---|---|---|---|
 | architect | Rattacher les nouvelles issues au point d'étape (lot) | aucun critère du § 4.2 | routine | tableau de couverture : chaque issue du lot → tâche → branche prévue, ou hors plan / doublon, avec la raison | un critère du § 4.2 → ligne « issue sensible » | toutes les issues du lot couvertes |
-| architect | Point d'étape après fusion | lot ≥ 8 issues, ou plusieurs branches touchées (**À ADAPTER**) | routine ; jugement si l'un des signaux | SHA cités, dépendances ajoutées / retirées explicites, décisions M-n | seuil « macro » (§ 4.3) atteint → Fable **proposé** au mainteneur | feuille de route à jour |
+| architect | Point d'étape après fusion | lot ≥ 8 issues, ou plusieurs branches touchées | routine ; jugement si l'un des signaux | SHA cités, dépendances ajoutées / retirées explicites, décisions M-n | seuil « macro » (§ 4.3) atteint → Fable **proposé** au mainteneur | feuille de route à jour |
 | architect | Plan de la branche suivante | — | jugement | trois à cinq issues, ordre des commits, agent et circuit par tâche, critères d'acceptation | § 4.1 | plan complet |
 | architect | Issue sensible : ADR, invariant de `CLAUDE.md` ou contrat partagé touché | § 4.2 | jugement | ADR et invariants cités, effet sur les contrats, branches touchées | § 4.1 ; sinon Fable **proposé** | avis rendu, ou décision du mainteneur |
 | architect | Rédaction d'un ADR **d'architecture** (couches, invariants, contrats) | — | **Fable** (routage initial) | contexte, options écartées, conséquences | décision du mainteneur | ADR proposé |
@@ -59,14 +61,14 @@ Tout autre usage de Fable est **proposé** au mainteneur (un message, réponse o
 ### 4.2 Issue sensible (revue plus forte, même pour une seule issue)
 
 - un ADR accepté ou un invariant de `CLAUDE.md`, « Architecture », est contredit ou modifié ;
-- un **contrat partagé** change : interface entre modules ou couches, format de données ou d'état, catalogue ou table utilisés par plusieurs branches (**À ADAPTER** : liste des contrats du projet) ;
+- un **contrat partagé** change : interface entre modules ou couches, format de données ou d'état, catalogue ou table utilisés par plusieurs branches — ici : `versions.env` (commits épinglés), `conf/agents.proto`, le format des fichiers partagés entre conteneurs (`current_plans.json`, `pseudo_commitments.json`, `claude_dialogue_state.json`), le contrat de sortie JSON du bot de dialogue (`reply` / `sincere`) et le `Dockerfile` ;
 - un résultat final ou un verdict change (Fable sur décision du mainteneur seulement).
 
 Le nombre d'issues d'un lot n'est qu'un complément : un gros lot fait passer en jugement, il ne déclenche jamais Fable à lui seul ; une issue unique à fort impact est sensible quel que soit le lot.
 
 ### 4.3 Seuil « macro » du point d'étape (Fable proposé au mainteneur)
 
-Un nouvel ADR d'architecture, ou le remplacement d'un ADR, est proposé ; **ou**, selon leur importance, au-dessus des seuils suivants (**À ADAPTER**) :
+Un nouvel ADR d'architecture, ou le remplacement d'un ADR, est proposé ; **ou**, selon leur importance, au-dessus des seuils suivants :
 - au moins deux couches ou modules dont les dépendances changent ;
 - au moins deux branches suivantes redécoupées ou réordonnées ;
 - un jalon dont le contenu change.

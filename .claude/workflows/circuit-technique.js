@@ -41,15 +41,15 @@ export const meta = {
 // A ADAPTER : batteries de verification, identiques a CLAUDE.md, « Commandes »
 // (commande complete, lancee depuis la racine du depot)
 const BATTERIES = [
-  // 'Rscript tests/test_unitaires.R',
-  // 'pytest -q',
+  'bash tests/verifier.sh',
+  'bash outils/exporter_patchs.sh --verifier',
 ]
 
 // A ADAPTER : repertoires que ni coder ni audit ne doivent toucher dans un
 // workflow (references de non-regression, documentation de fond : regle 9)
 const ZONES_PROTEGEES = [
-  // 'tests/reference/',
-  // 'docs/doc/',
+  'docs/doc/',
+  'versions.env',
 ]
 
 // Consigne commune a tous les agents du workflow (principe 2)

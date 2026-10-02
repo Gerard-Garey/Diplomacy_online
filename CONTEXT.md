@@ -4,9 +4,23 @@ Vocabulaire à employer tel quel dans le code, la documentation, les issues et l
 
 ## Domaine
 
-**À ADAPTER** : un terme par entrée, sa définition, et les synonymes écartés.
-
-- **<terme>** : <définition>. *Ne pas dire* : <synonyme écarté>.
+- **Amont** : l'un des deux logiciels tiers, Cicero ou webDiplomacy, à son commit épinglé ; par extension le dossier `amont/` où `install.sh` les prépare. *Ne pas dire* : upstream, vendor.
+- **Patch** : modification d'un fichier existant d'un amont (`*/patches/`). **Overlay** : fichier nouveau copié dans un amont (`*/overlay/`).
+- **Puissance** : l'un des sept pays du jeu, en majuscules et en anglais comme dans le code (`AUSTRIA`, `ITALY`…). *Ne pas dire* : nation, joueur (un joueur *tient* une puissance).
+- **Bot** : compte `bot1`…`bot7` de webDiplomacy tenant une puissance ; ses ordres viennent du moteur, ses messages de Claude. La correspondance bot ↔ puissance change à chaque partie.
+- **Moteur** : la recherche stratégique de Cicero (BQRE1P / piKL) qui calcule les ordres, conteneur `cicero-orders`. *Ne pas dire* : l'IA, Cicero tout court (ambigu avec son dialogue, que le projet n'utilise pas).
+- **Bot de dialogue** : `claude_dialogue_bot.py`, conteneur `cicero-dialogue`.
+- **Phase** : `S1901M`, `F1901M`, `W1901A`… (saison, année, type : `M` mouvement, `R` retraite, `A` ajustement). Le dialogue n'agit sur les ordres qu'en phase de mouvement.
+- **Ordre** : instruction pour une unité, en notation du moteur, avec espaces (`F TRI - ALB`, `A BUD S A SER`). **Action** : l'ensemble des ordres d'une puissance pour une phase.
+- **Ordres plausibles** : les actions candidates (35 au plus) entre lesquelles le moteur choisit ; une action absente de cette liste ne peut pas être jouée.
+- **Plan** : l'action préférée du moteur et ses alternatives, chacune avec son **coût** (valeur perdue par rapport à la meilleure), exportées dans `current_plans.json`.
+- **Ordre en cache** : l'ordre qu'un bot jouerait si la phase se résolvait maintenant, lu par `check_orders.sh` ; il peut encore changer.
+- **Promesse** : engagement, pris dans un message, de jouer un ordre précis cette phase. **Engagement sincère** : promesse que le bot compte tenir, inscrite dans le champ privé `sincere`. **Bluff** : promesse faite dans le message et absente de `sincere`.
+- **Promesse rompue** : promesse légale au moment où elle a été faite, non retrouvée dans les ordres résolus. Un ordre impossible ou illégal n'est jamais une promesse.
+- **Trahison** : abandon délibéré d'un engagement sincère au profit d'un autre de valeur nettement supérieure (ligne de journal `[betrayal]`). **Double jeu** : promesses contraires faites à deux puissances sur une même unité (`[double-deal]`).
+- **Registre de confiance** : bilan, tenu par chaque bot, des promesses tenues et rompues par chaque interlocuteur.
+- **Ancrage** : le fait que le dialogue soit écrit à partir du plan du moteur. *Ne pas dire* : grounding.
+- **Clef en main** : un `git clone` suivi de `./install.sh` et `./demarrer.sh` suffit, sans rien reprendre d'une autre machine.
 
 ## Organisation du travail
 

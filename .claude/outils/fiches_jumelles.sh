@@ -20,7 +20,7 @@ set -euo pipefail
 
 # A ADAPTER : roles dedoubles (un expert duplique s'ajoute ici), effort et
 # plafond de tours des fiches de jugement.
-ROLES="architect expert"
+ROLES="architect expert-cicero expert-webdip"
 EFFORT_APPROFONDI="high"
 TOURS_APPROFONDI="80"
 
