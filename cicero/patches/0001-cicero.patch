@@ -1,0 +1,317 @@
+diff --git a/.gitignore b/.gitignore
+index acd53b7..dfd66a9 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -40,3 +40,4 @@ dipcc/Testing/
+ /src/
+ dipcc/detect_cuda_version.cc
+ node_modules/
++.env
+diff --git a/conf/agents.proto b/conf/agents.proto
+index 699cabb..65da2e9 100644
+--- a/conf/agents.proto
++++ b/conf/agents.proto
+@@ -465,6 +465,30 @@ message SearchBotAgent {
+     optional float min_unnormalized_weight = 9 [ default = -1 ];
+     optional float max_unnormalized_weight = 10 [ default = -1 ];
+ 
++    // Externally-supplied pseudo-commitments (e.g. extracted by an LLM from
++    // real negotiation text) injected into each opponent's plausible-order
++    // policy before the bilateral search. Soft nudge only, never a hard
++    // constraint: see pseudo_commitment_prior/boost below.
++    optional bool enable_pseudo_commitments = 11 [ default = false ];
++    // DEPRECATED (unused). Promised actions are now injected via
++    // extra_plausible_orders, which gets them a model-computed probability from
++    // the parlai rescoring instead of this hand-picked prior.
++    optional float pseudo_commitment_prior = 12 [ deprecated = true ];
++    // Multiplicative boost applied to a promised action's probability if it
++    // was already a plausible-order candidate. Result is capped (see
++    // pseudo_commitments.py) so it can never dominate the distribution.
++    optional float pseudo_commitment_boost = 13 [ default = 3.0 ];
++    // DEPRECATED (unused). Superseded by extra_plausible_orders injection: a
++    // promised action is now added as a real candidate and fully evaluated by
++    // rollouts, so the value function -- not an admission filter -- is what
++    // stops a bad promise from being played.
++    optional bool pseudo_commitment_require_considered = 14 [ deprecated = true ];
++    // Max promised/bold actions injected into the candidate set per search.
++    // Each injected action costs roughly (opponent actions x cond samples x
++    // opponents) extra rollouts -- about +8% at our current settings -- and
++    // also widens the argmax over noisy value estimates, so keep this small.
++    optional int32 pseudo_commitment_max_injected = 15 [ default = 2 ];
++
+     // this should be specified by searchbot.model_path
+     optional string all_power_model_path = 101 [ deprecated = true ];
+   };
+diff --git a/dipcc/CMakeLists.txt b/dipcc/CMakeLists.txt
+index f1259e8..f6a50c5 100644
+--- a/dipcc/CMakeLists.txt
++++ b/dipcc/CMakeLists.txt
+@@ -56,7 +56,7 @@ ELSE()
+ ENDIF()
+ 
+ # Compile profiling
+-IF(CMAKE_BUILD_TYPE MATCHES Release)
++IF(CMAKE_BUILD_TYPE MATCHES Release AND FALSE)
+     add_executable(profile_dipcc dipcc/profiling/profile.cc ${SOURCES})
+     target_link_libraries(profile_dipcc dipcc glog pthread)
+ 
+diff --git a/fairdiplomacy/agents/bqre1p_agent.py b/fairdiplomacy/agents/bqre1p_agent.py
+index 6c1e271..bbda162 100644
+--- a/fairdiplomacy/agents/bqre1p_agent.py
++++ b/fairdiplomacy/agents/bqre1p_agent.py
+@@ -38,6 +38,8 @@ from fairdiplomacy.agents.br_corr_bilateral_search import (
+ )
+ from fairdiplomacy.agents.base_strategy_model_wrapper import BaseStrategyModelWrapper
+ from fairdiplomacy.agents.plausible_order_sampling import PlausibleOrderSampler
++from fairdiplomacy.utils.pseudo_commitments import apply_commitments_to_policy, load_commitments
++from fairdiplomacy.utils.plan_export import export_plans
+ from fairdiplomacy.models.consts import POWERS
+ from fairdiplomacy.typedefs import (
+     Action,
+@@ -1070,6 +1072,17 @@ class BQRE1PAgent(SearchBotAgent):
+                 game, agent_power=agent_power, agent_state=agent_state
+             )
+         bp_policy = filter_invalid_actions_from_policy(bp_policy, game)
++
++        if self.br_corr_bilateral_search_cfg.enable_pseudo_commitments:
++            commitments = load_commitments(game.get_metadata("game_id"), game.current_short_phase)
++            bp_policy = apply_commitments_to_policy(
++                bp_policy,
++                game,
++                commitments,
++                agent_power,
++                self.br_corr_bilateral_search_cfg.pseudo_commitment_boost,
++            )
++
+         # 1) get pairwise bqre policies for all our opponents
+         bqre_policies: PowerPolicies = {}
+         timings.start("corr_search_rescore_bp")
+@@ -1189,7 +1202,7 @@ class BQRE1PAgent(SearchBotAgent):
+         )
+ 
+         timings.start("corr_search_br_get_action")
+-        best_action, best_value = compute_best_action_against_reweighted_opponent_joint_actions(
++        best_action, best_value, action_values = compute_best_action_against_reweighted_opponent_joint_actions(
+             game,
+             agent_power,
+             bp_policy[agent_power],
+@@ -1201,6 +1214,10 @@ class BQRE1PAgent(SearchBotAgent):
+         )
+         result.set_policy_and_value_for_power(agent_power, best_action, best_value)
+ 
++        export_plans(
++            game.get_metadata("game_id"), game.current_short_phase, agent_power, action_values
++        )
++
+         timings.stop()
+         timings.pprint(logging.getLogger("timings").info)
+         return result
+diff --git a/fairdiplomacy/agents/br_corr_bilateral_search.py b/fairdiplomacy/agents/br_corr_bilateral_search.py
+index ecc13ae..c49f730 100644
+--- a/fairdiplomacy/agents/br_corr_bilateral_search.py
++++ b/fairdiplomacy/agents/br_corr_bilateral_search.py
+@@ -307,7 +307,7 @@ def compute_best_action_against_reweighted_opponent_joint_actions(
+     all_power_base_strategy_model: MultiProcessBaseStrategyModelExecutor,
+     player_rating: Optional[float],
+     regularize_lambda: float,
+-) -> Tuple[Action, float]:
++) -> Tuple[Action, float, List[Tuple[Action, float, float, float]]]:
+     action_values: List[Tuple[Action, float, float, float]] = []
+     weights_tensor = torch.tensor(weights, dtype=torch.float32)
+     assert abs(weights_tensor.sum().item() - 1) < 1e-5
+@@ -352,7 +352,10 @@ def compute_best_action_against_reweighted_opponent_joint_actions(
+         logging.info(f"|>:  {pice_value:8.5f}  {value:8.5f}  {prob:8.5f}  {action}")
+ 
+     best_action, _, _, best_value = action_values[0]
+-    return best_action, best_value
++    # action_values is returned (sorted best-first) so callers can surface the
++    # runner-up plans -- used to let the dialogue bot negotiate over genuinely
++    # near-optimal alternatives instead of only its single best action.
++    return best_action, best_value, action_values
+ 
+ 
+ def compute_payoff_matrix_for_all_opponents(
+diff --git a/fairdiplomacy/agents/searchbot_agent.py b/fairdiplomacy/agents/searchbot_agent.py
+index 58627c1..2e8a891 100644
+--- a/fairdiplomacy/agents/searchbot_agent.py
++++ b/fairdiplomacy/agents/searchbot_agent.py
+@@ -36,6 +36,10 @@ from fairdiplomacy.agents.base_search_agent import (
+ )
+ from fairdiplomacy.agents.bilateral_stats import BilateralStats
+ from fairdiplomacy.pseudo_orders import PseudoOrders
++from fairdiplomacy.utils.pseudo_commitments import (
++    build_extra_plausible_actions,
++    load_commitments,
++)
+ from fairdiplomacy.utils.temp_redefine import temp_redefine
+ from parlai_diplomacy.utils.misc import last_dict_key
+ from parlai.utils.logging import _is_interactive
+@@ -584,7 +588,17 @@ class SearchBotAgent(BaseSearchAgent):
+         cfr_result = self.try_get_cached_search_result(game, state)
+ 
+         if not cfr_result:
+-            bp_policy = self.maybe_get_incremental_bp(game, agent_power=power, agent_state=state)
++            # Realise this power's own sincere commitments as an extra candidate
++            # action. Injected here (rather than boosted post hoc) so it survives
++            # the plausible-order cutoff and gets a real, dialogue-conditioned
++            # probability from the parlai rescoring inside the incremental update.
++            extra_plausible_orders = self._maybe_get_committed_actions(game, power, state)
++            bp_policy = self.maybe_get_incremental_bp(
++                game,
++                agent_power=power,
++                agent_state=state,
++                extra_plausible_orders=extra_plausible_orders,
++            )
+ 
+             if self.use_br_correlated_search(game.phase, "final_order"):
+                 cfr_result = self.run_best_response_against_correlated_bilateral_search(
+@@ -693,6 +707,34 @@ class SearchBotAgent(BaseSearchAgent):
+ 
+         return policy
+ 
++    def _maybe_get_committed_actions(
++        self, game: Game, power: Power, state: SearchBotAgentState
++    ) -> Optional[PlausibleOrders]:
++        """Candidate action(s) realising `power`'s own negotiated commitments, if any.
++
++        Splices the promises onto the action this power currently intends, so the
++        engine evaluates "my plan, but honouring what I said" head-to-head against
++        its plan. Returns None when there is nothing to inject -- including on the
++        first search of a phase, where no negotiation has happened yet.
++        """
++        cfg = self.br_corr_bilateral_search_cfg
++        if cfg is None or not cfg.enable_pseudo_commitments:
++            return None
++
++        last = state.get_last_search_result(game)
++        if last is None:
++            return None
++        policy = last.get_agent_policy().get(power)
++        if not policy:
++            return None
++        base_action = max(policy, key=policy.get)
++
++        commitments = load_commitments(game.get_metadata("game_id"), game.current_short_phase)
++        extra = build_extra_plausible_actions(
++            game, power, base_action, commitments, cfg.pseudo_commitment_max_injected
++        )
++        return extra or None
++
+     def use_br_correlated_search(self, phase: str, mode: str):
+         assert mode in ["final_order", "pseudo_order"], mode
+         if self.br_corr_bilateral_search_cfg is None:
+diff --git a/fairdiplomacy/utils/orders.py b/fairdiplomacy/utils/orders.py
+index ea30d0e..2e3e598 100644
+--- a/fairdiplomacy/utils/orders.py
++++ b/fairdiplomacy/utils/orders.py
+@@ -4,9 +4,27 @@
+ # This source code is licensed under the MIT license found in the
+ # LICENSE file in the root directory of this source tree.
+ #
++import re
++
+ from fairdiplomacy.typedefs import Location, Order
+ 
+ 
++def normalize_order_spacing(order: Order) -> Order:
++    """Ensure canonical spacing around '-' in an order string.
++
++    LLM-generated orders routinely omit the spaces around the move dash (e.g.
++    "F TRI-ALB" instead of "F TRI - ALB"), which silently breaks every parser
++    in this file: get_unit_location() et al. all split on whitespace, so
++    "TRI-ALB" is read back as a single (bogus) location token instead of "TRI".
++    A malformed order like that then fails legality checks and is dropped --
++    not incorrectly, but for the wrong reason (a formatting slip, not an
++    actually-illegal or hallucinated order). Idempotent: already-canonical
++    strings pass through unchanged, so it is safe to apply unconditionally at
++    every LLM-output boundary.
++    """
++    return re.sub(r"(?<=\S)-(?=\S)", " - ", order.strip())
++
++
+ def is_hold(order: Order) -> bool:
+     pieces = order.split()
+     return len(pieces) == 3 and pieces[2] == "H"
+diff --git a/fairdiplomacy/webdip/message_approval_cache_api.py b/fairdiplomacy/webdip/message_approval_cache_api.py
+index fa44a06..2b12c7f 100644
+--- a/fairdiplomacy/webdip/message_approval_cache_api.py
++++ b/fairdiplomacy/webdip/message_approval_cache_api.py
+@@ -5,6 +5,7 @@
+ # LICENSE file in the root directory of this source tree.
+ #
+ from collections import Counter, defaultdict
++import os
+ import collections
+ from datetime import datetime, timezone
+ import functools
+@@ -38,13 +39,16 @@ NOTE: Some hard-coded global constants need to be set for this work (REDIS_IP, P
+ PRESS_COUNTRY_ID_TO_POWER = COUNTRY_ID_TO_POWER_OR_ALL
+ PRESS_POWER_TO_COUNTRY_ID = {v: k for k, v in PRESS_COUNTRY_ID_TO_POWER.items()}
+ 
+-REDIS_IP = None
++REDIS_IP = os.getenv("CICERO_REDIS_IP", "127.0.0.1")
+ # Production
+ PROD_DB = 1
+ DEV_DB = 2
+-PORT = None
++PORT = int(os.getenv("CICERO_REDIS_PORT", "43005"))
+ 
+-WEBDIP_GAMES_BASE_DIR = None
++WEBDIP_GAMES_BASE_DIR = os.getenv(
++    "CICERO_WEBDIP_GAMES_DIR",
++    os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "webdip_logs_test"),
++)
+ WEBDIP_GAMES_DIR_GLOB = f"{WEBDIP_GAMES_BASE_DIR}/**/games"
+ 
+ if REDIS_IP is None or PORT is None or WEBDIP_GAMES_BASE_DIR is None:
+diff --git a/fairdiplomacy_external/webdip_api.py b/fairdiplomacy_external/webdip_api.py
+index 749de9e..68ef27f 100644
+--- a/fairdiplomacy_external/webdip_api.py
++++ b/fairdiplomacy_external/webdip_api.py
+@@ -255,6 +255,11 @@ def webdip_state_to_game(webdip_state_json: Json, stop_at_phase: Optional[Phase]
+     phase_length = webdip_state_json["phaseLengthInMinutes"]
+     game.set_metadata("phase_minutes", str(phase_length))
+ 
++    # Stash the webDip gameID so downstream code (e.g. pseudo_commitments.py)
++    # can look up per-game data without threading gameID through every call site.
++    if "gameID" in webdip_state_json:
++        game.set_metadata("game_id", str(webdip_state_json["gameID"]))
++
+     # Webdip will sometimes send messages in the wrong phase -- e.g.
+     # m["phaseMarker"] will be "Builds" but the message dict will be in the prior
+     # "Diplomacy" phase. Here we gather all messages and annotate them with the
+diff --git a/thirdparty/github/fairinternal/postman/Makefile b/thirdparty/github/fairinternal/postman/Makefile
+index 9246dc9..b627c4d 100644
+--- a/thirdparty/github/fairinternal/postman/Makefile
++++ b/thirdparty/github/fairinternal/postman/Makefile
+@@ -5,15 +5,15 @@ CMAKE_TARGET := cmake_build/postman/Makefile
+ all: compile
+ 
+ $(CMAKE_TARGET):
+-	git submodule update --init --recursive
++	# Sous-modules récupérés par install.sh (le build Docker n'a pas de .git).
+ 	mkdir -p cmake_build/postman && cd cmake_build/postman && cmake -DCMAKE_BUILD_TYPE=Release ../../postman -DPYTHON_EXECUTABLE=$(shell which python) -DCMAKE_LIBRARY_OUTPUT_DIRECTORY=../../postman/python/postman
+ 
+ compile: $(CMAKE_TARGET)
+-	make -C cmake_build/postman -j
++	make -C cmake_build/postman -j1
+ 
+ compile_slow: $(CMAKE_TARGET)
+ 	# Compilation with limited number of threads to keep Circle CI alive.
+-	make -C cmake_build/postman -j 10 VERBOSE=1
++	make -C cmake_build/postman -j1 VERBOSE=1
+ 
+ gen_egg:
+ 	cd postman && python setup.py egg_info
+diff --git a/thirdparty/github/fairinternal/postman/nest/nest/nest.h b/thirdparty/github/fairinternal/postman/nest/nest/nest.h
+index 139b66e..7134390 100644
+--- a/thirdparty/github/fairinternal/postman/nest/nest/nest.h
++++ b/thirdparty/github/fairinternal/postman/nest/nest/nest.h
+@@ -13,6 +13,7 @@ LICENSE file in the root directory of this source tree.
+ #include <string>
+ #include <variant>
+ #include <vector>
++#include <stdexcept>
+ 
+ namespace nest {
+ // Magic from https://en.cppreference.com/w/cpp/utility/variant/visit

@@ -1,0 +1,11 @@
+includes {path: "agents/base_strategy_model.prototxt"; mount: "agent";}
+play_webdip {
+    api_key: "bot1,bot2,bot3,bot4,bot5,bot6,bot7"
+    account_name: "cicero_bot1,cicero_bot2,cicero_bot3,cicero_bot4,cicero_bot5,cicero_bot6,cicero_bot7"
+    checkpoint_path: "PER_API_KEY"
+    webdip_url: "http://localhost:43000"
+    variant_id: 1
+    allow_dialogue: false
+    ready_immediately: true
+    log_dir: "./webdip_logs_test"
+}
