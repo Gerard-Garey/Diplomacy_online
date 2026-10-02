@@ -1,0 +1,171 @@
+diff --git a/botgamecreate.php b/botgamecreate.php
+index cd8c8a95..69c1c356 100644
+--- a/botgamecreate.php
++++ b/botgamecreate.php
+@@ -290,7 +290,17 @@ if( isset($_REQUEST['newGame']) and is_array($_REQUEST['newGame']) )
+ 		if ( !$input['name'] ) { throw new Exception(l_t("No name entered.")); }
+ 
+ 		list($countryCount) = $DB->sql_row("SELECT countryCount FROM wD_VariantInfo WHERE variantID=".$input['variantID']);
+-		
++		$countryCount = (int)$countryCount;
++
++		if ($countryCount < 2)
++			{
++    			throw new Exception(
++        			l_t(
++            			"Invalid or missing country count for variant ID %s. Please regenerate the variant information.",
++            			(string)$input['variantID']
++        			)
++    			);
++			}
+ 		if ($input['countryID'] < 0 or $input['countryID'] > $countryCount)
+ 		{
+ 			throw new Exception(l_t("%s is an invalid country ID.",(string)$input['countryID']));
+@@ -317,7 +327,7 @@ if( isset($_REQUEST['newGame']) and is_array($_REQUEST['newGame']) )
+ 		}
+ 
+ 		//Add Bots
+-		$botNum = $countryCount - 1;
++		$botNum = max(0, $countryCount - 1);
+ 		// $tabl = $DB->sql_tabl("SELECT id FROM wD_Users WHERE type LIKE '%bot%' LIMIT ".$botNum);
+ 		// Use a specific bot for a specific variant for now. A new Config:: function is needed to be able to flexibly map variants to certain specialized bots
+ 		$tabl = $DB->sql_tabl("SELECT id FROM wD_Users WHERE type LIKE '%bot%' ".
+diff --git a/docker-compose.yml b/docker-compose.yml
+index 40adf885..19999089 100644
+--- a/docker-compose.yml
++++ b/docker-compose.yml
+@@ -171,7 +171,24 @@ services:
+ # The webdiplomacy/gunboatbots:2025-06-10 image is a fork with a couple of minor bugfixes, but mainly it contains all the
+ # required model data, which were previously hosted on URLs that had gone down. With access to this image only the API 
+ # endpoint and API keys are needed to run the bots.
+-  bots:
++
++  bot-service:
++    profiles: ["bots"]
++    build:
++      context: ./bot-service
++    container_name: webdip-bot-service
++    restart: "unless-stopped"
++    environment:
++      WEBDIP_API_URL: http://webserver/api.php
++      WEBDIP_API_KEYS: bot1,bot2,bot3,bot4,bot5,bot6,bot7
++      BOT_POLL_SECONDS: ${BOT_POLL_SECONDS:-10}
++      BOT_DRY_RUN: ${BOT_DRY_RUN:-false}
++      BOT_RUN_ONCE: ${BOT_RUN_ONCE:-false}
++    depends_on:
++      - webserver
++
++  legacy-bots:
++    profiles: ["legacy-bots"]
+     container_name: webdip-gunboatbots
+     image: 'webdiplomacy/gunboatbots:2025-06-09'
+     restart: always
+diff --git a/gamemaster/backgroundTasks.php b/gamemaster/backgroundTasks.php
+index 46b6909b..6e6941a4 100644
+--- a/gamemaster/backgroundTasks.php
++++ b/gamemaster/backgroundTasks.php
+@@ -311,7 +311,7 @@ class libBackgroundTasks
+ 
+             (Note: Test restores from backup every so often to ensure they are valid and working)
+             */
+-            if( isset(Config::$gameBackupDirectory) )
++            if( !empty(Config::$gameBackupDirectory) )
+             {
+                 if( !is_dir(Config::$gameBackupDirectory) )
+                 {
+diff --git a/install/gamemaster-entrypoint.sh b/install/gamemaster-entrypoint.sh
+index ccd17a69..bc0c0c7b 100755
+--- a/install/gamemaster-entrypoint.sh
++++ b/install/gamemaster-entrypoint.sh
+@@ -79,7 +79,10 @@ else
+ 
+   echo "Starting gamemaster"
+   while true; do
+-    gameMasterSecret='' QUERY_STRING='' wget -O - http://webserver/gamemaster.php?gameMasterSecret= > /dev/null 2>&1
++    # gameMasterSecret must be in the URL: gamemaster.php reads it from the query string
++    # ($_REQUEST), not from the environment, so passing it as a shell var here is a no-op
++    # and every request was silently failing the permission check ("Denied").
++    wget -O - "http://webserver/gamemaster.php?gameMasterSecret=local-gamemaster-dev-secret" > /dev/null 2>&1
+     sleep 3
+     echo -n "."
+   done
+diff --git a/lib/auth.php b/lib/auth.php
+index 38dcf73f..9bbc5485 100755
+--- a/lib/auth.php
++++ b/lib/auth.php
+@@ -199,7 +199,15 @@ class libAuth
+ 	 */
+ 	public static function email_validateURL($email, $loginPage='register.php')
+ 	{
+-		$thisURL = 'https://'.$_SERVER['SERVER_NAME'].'/'.$loginPage;
++		$scheme = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off')
++    		    ? 'https'
++    		    : ($_SERVER['REQUEST_SCHEME'] ?? 'http');
++
++		$host = $_SERVER['HTTP_HOST']
++    		    ?? $_SERVER['SERVER_NAME']
++                    ?? 'localhost:43000';
++
++		$thisURL = $scheme.'://'.$host.'/'.$loginPage;
+ 
+ 		// %7C = | , but some webmail clients think that | is the end of the link
+ 		$emailToken = urlencode(self::email_token($email));
+diff --git a/objects/misc.php b/objects/misc.php
+index 4b7aa76e..765db2c7 100755
+--- a/objects/misc.php
++++ b/objects/misc.php
+@@ -56,13 +56,23 @@ class Misc
+ 	
+ 	public function write()
+ 	{
+-		global $DB;
+-		
+-		foreach($this->updated as $name)
+-		{
+-			$DB->sql_put("UPDATE wD_Misc SET value = ".$this->data[$name]." WHERE name = '".$name."'");
+-			unset($this->updated[$name]);
+-		}
++        	global $DB;
++
++        	foreach($this->updated as $name)
++        	{
++                	$value = $this->data[$name];
++
++                	if (!is_numeric($value)) {
++                        	$value = 0;
++                	}
++
++                	$DB->sql_put(
++                        	"UPDATE wD_Misc SET value = ".$value.
++                        	" WHERE name = '".$name."'"
++                	);
++
++                	unset($this->updated[$name]);
++        	}
+ 	}
+ 	
+ 	public function read()
+@@ -78,4 +88,4 @@ class Misc
+ 	}
+ }
+ 
+-?>
+\ No newline at end of file
++?>
+diff --git a/phpdocker/php-fpm/php-ini-overrides.ini b/phpdocker/php-fpm/php-ini-overrides.ini
+index c35f34e7..19ad9495 100644
+--- a/phpdocker/php-fpm/php-ini-overrides.ini
++++ b/phpdocker/php-fpm/php-ini-overrides.ini
+@@ -4,6 +4,12 @@ memory_limit = 200M
+ display_errors = On
+ max_execution_time = 600
+ 
++# gamemaster.php is polled every 3s by gamemaster-entrypoint.sh; with validate_timestamps on,
++# concurrent FPM workers race to revalidate/recompile the same files, causing intermittent
++# Cannot redeclare Misc::write fatals. Disable timestamp revalidation to remove the race.
++# Restart php-fpm after editing PHP source for changes to take effect.
++opcache.validate_timestamps = 0
++
+ # Windows
+ #xdebug.mode = debug
+ #xdebug.remote_host = host.docker.internal
