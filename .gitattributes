@@ -1,0 +1,9 @@
+# Fins de ligne LF dans le depot et sur tous les postes (Windows local, cloud
+# Linux), pour eviter les diffs parasites.
+* text=auto eol=lf
+
+*.pdf  binary
+*.xlsx binary
+*.png  binary
+*.jpg  binary
+*.rds  binary

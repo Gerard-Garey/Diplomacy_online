@@ -1,0 +1,21 @@
+name: Évolution
+description: Une nouvelle fonctionnalité, une nouvelle méthode, une amélioration de l'interface ou de la documentation.
+labels: ["enhancement", "needs-triage"]
+body:
+  - type: textarea
+    id: besoin
+    attributes:
+      label: Besoin
+      description: Ce qui manque aujourd'hui, et pourquoi c'est utile.
+    validations:
+      required: true
+  - type: textarea
+    id: proposition
+    attributes:
+      label: Proposition
+      description: Approche envisagée, référence qui la fonde, maquette d'interface…
+  - type: textarea
+    id: resultats
+    attributes:
+      label: Impact attendu sur les résultats
+      description: Aucun, ou quels résultats changent et pourquoi.

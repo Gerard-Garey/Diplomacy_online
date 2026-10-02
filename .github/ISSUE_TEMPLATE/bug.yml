@@ -1,0 +1,21 @@
+name: Anomalie
+description: Un résultat faux, une erreur, ou une incohérence entre code et documentation.
+labels: ["bug", "needs-triage"]
+body:
+  - type: textarea
+    id: constat
+    attributes:
+      label: Constat
+      description: Ce qui se passe, et ce qui devrait se passer.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction
+      description: Commande, données et paramètres qui reproduisent le constat.
+  - type: textarea
+    id: impact
+    attributes:
+      label: Impact
+      description: Résultats affectés et enjeu pour les livrables.

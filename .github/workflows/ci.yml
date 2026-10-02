@@ -1,0 +1,54 @@
+name: CI
+
+# Contrôles requis par le ruleset de main (README, « Sécurité du dépôt »).
+# À ADAPTER : ajouter les jobs de tests du projet, et leur nom aux contrôles
+# requis du ruleset.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  controles:
+    name: Contrôles du dépôt
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - name: Réglages Claude Code valides
+        run: |
+          set -euo pipefail
+          python3 -m json.tool .claude/settings.json > /dev/null
+          echo "settings.json : JSON valide."
+      - name: Fiches d'agents complètes
+        run: |
+          set -euo pipefail
+          statut=0
+          for f in .claude/agents/*.md; do
+            for champ in name description tools model; do
+              if ! sed -n '2,/^---$/p' "$f" | grep -q "^$champ:"; then
+                echo "::error file=$f::champ '$champ' absent du frontmatter"; statut=1
+              fi
+            done
+          done
+          exit $statut
+      - name: Fiches -approfondi à jour
+        run: bash .claude/outils/fiches_jumelles.sh --verifier
+      - name: Aucun fichier sensible versionné
+        run: |
+          set -euo pipefail
+          if git ls-files | grep -E '(^|/)(\.env(\..*)?|.*\.(pem|key|p12|pfx)|id_rsa.*|id_ed25519.*|settings\.local\.json|CLAUDE\.local\.md)$'; then
+            echo "::error::fichier sensible versionné (voir la liste ci-dessus)"; exit 1
+          fi
+          echo "Aucun fichier sensible versionné."

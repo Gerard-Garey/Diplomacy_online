@@ -1,0 +1,37 @@
+{
+  "subagentPromptCacheTtl": "1h",
+  "permissions": {
+    "allow": [
+      "Bash(git commit:*)",
+      "Bash(git push -u origin claude/*)"
+    ]
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/installer_plugins.sh\"",
+            "timeout": 300
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/journal_agents.sh\"",
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  },
+  "enabledPlugins": {
+    "mattpocock-skills@claude-plugins-official": true,
+    "document-skills@anthropic-agent-skills": true
+  }
+}
