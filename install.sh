@@ -83,6 +83,17 @@ if [ ! -d "$W/sse-server/node_modules" ]; then
   docker run --rm -u "$(id -u):$(id -g)" -e npm_config_cache=/tmp/.npm -v "$W/sse-server:/app" -w /app \
     node:16.15.1-alpine3.14 npm ci --no-audit --no-fund
 fi
+if [ ! -f "$W/beta/index.html" ]; then
+  # Interface cliquable (React) : c'est celle qu'ouvre par défaut un compte neuf.
+  # --ignore-scripts : le script « prepare » d'amont installerait des hooks git dans amont/.
+  # Mémoire bridée, sans cartes de source : la compilation est gourmande.
+  docker run --rm --memory=4g -u "$(id -u):$(id -g)" -e npm_config_cache=/tmp/.npm \
+    -e GENERATE_SOURCEMAP=false -e CI=false -e NODE_OPTIONS=--max-old-space-size=3072 \
+    -v "$W:/app" -w /app/beta-src node:20-alpine \
+    sh -c 'npm ci --ignore-scripts --no-audit --no-fund && npm run build'
+  [ -f "$W/beta/index.html" ] || echec "l'interface cliquable n'a pas été construite"
+  rm -rf "$W/beta-src/node_modules"   # ~640 Mo, inutiles une fois beta/ construit
+fi
 
 if [ "$MODELES_DL" = 1 ]; then
   etape "Poids de modèle (sélection utile, quelques Go)"
