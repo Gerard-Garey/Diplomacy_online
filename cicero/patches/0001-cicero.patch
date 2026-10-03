@@ -7,6 +7,19 @@ index acd53b7..dfd66a9 100644
  dipcc/detect_cuda_version.cc
  node_modules/
 +.env
+diff --git a/Makefile b/Makefile
+index 2192734..b1525d0 100644
+--- a/Makefile
++++ b/Makefile
+@@ -17,7 +17,7 @@ selfplay:
+ 	mkdir -p build/selfplay
+ 	cd build/selfplay \
+ 		&& cmake ../../fairdiplomacy/selfplay/cc -DPOSTMAN_DIR=$(POSTMAN_DIR) -DCMAKE_LIBRARY_OUTPUT_DIRECTORY=../../fairdiplomacy/selfplay \
+-		&& make -j
++		&& $(MAKE)
+ 
+ # Compiles protos and sets up pyi files for pyright to be happy.
+ protos:
 diff --git a/conf/agents.proto b/conf/agents.proto
 index 699cabb..65da2e9 100644
 --- a/conf/agents.proto
