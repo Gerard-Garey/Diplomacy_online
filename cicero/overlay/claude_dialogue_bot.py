@@ -339,18 +339,66 @@ def verify_promises(game, game_id: int, my_power: str, bot_state: dict) -> dict:
     return trust
 
 
+class UnreadableStateFile(RuntimeError):
+    """A state file exists on disk but does not hold a JSON object."""
+
+
+def _read_json_file(path: Path) -> dict:
+    """Read a JSON object from `path`. A missing file is an empty state.
+
+    A file that is there but unreadable (truncated, empty, not a JSON object)
+    raises instead of returning {}: starting again from an empty state would
+    look fine and silently lose replied_ts (every message already answered gets
+    answered again) or the promises of the current phase, and the next save
+    would then overwrite whatever was still recoverable in the file.
+    """
+    try:
+        data = json.loads(path.read_text())
+    except FileNotFoundError:
+        return {}
+    except ValueError as e:  # JSONDecodeError, or bytes that are not UTF-8
+        data, reason = None, str(e)
+    else:
+        reason = f"expected a JSON object, found {type(data).__name__}"
+    if not isinstance(data, dict):
+        raise UnreadableStateFile(
+            f"{path} exists but is not readable JSON ({reason}). It has been left "
+            f"untouched. The dialogue bot stays silent (no message read, no reply "
+            f"sent, nothing written) until you repair the file or move it aside; no "
+            f"restart is needed, it resumes by itself from the files on disk. A "
+            f"missing file means an empty state: without the state file, messages "
+            f"already answered would be answered again."
+        )
+    return data
+
+
+def _write_json_file(path: Path, data) -> None:
+    """Write atomically (temp in the same directory + os.replace, as plan_export
+    does): a container killed mid-write leaves the previous file intact instead
+    of a truncated one.
+
+    Never replaces a file that is there but unreadable: raises UnreadableStateFile
+    like a read would, so what is still recoverable in it stays on disk."""
+    _read_json_file(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(data))
+    os.replace(tmp, path)
+
+
 def load_commitments_file():
-    if COMMITMENTS_FILE.exists():
-        try:
-            return json.loads(COMMITMENTS_FILE.read_text())
-        except json.JSONDecodeError:
-            return {}
-    return {}
+    return _read_json_file(COMMITMENTS_FILE)
 
 
 def save_commitments_file(data):
-    COMMITMENTS_FILE.parent.mkdir(parents=True, exist_ok=True)
-    COMMITMENTS_FILE.write_text(json.dumps(data))
+    _write_json_file(COMMITMENTS_FILE, data)
+
+
+def check_state_files() -> dict:
+    """Raise UnreadableStateFile if either state file is there but unreadable.
+    Returns the state as it is on disk."""
+    load_commitments_file()
+    return _read_json_file(STATE_FILE)
 
 POWER_TO_ID = {v: k for k, v in COUNTRY_ID_TO_POWER_OR_ALL.items()}
 
@@ -386,14 +434,11 @@ Bluffing in "reply" is entirely legitimate. What must never happen is a bluff ap
 
 
 def load_state():
-    if STATE_FILE.exists():
-        return json.loads(STATE_FILE.read_text())
-    return {}
+    return _read_json_file(STATE_FILE)
 
 
 def save_state(state):
-    STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
-    STATE_FILE.write_text(json.dumps(state))
+    _write_json_file(STATE_FILE, state)
 
 
 def _extract_json_object(text: str) -> Optional[str]:
@@ -568,6 +613,11 @@ def process_bot(api_key: str, state: dict):
                 print(f"  Claude generation failed: {e}", flush=True)
                 continue
 
+            # The Claude call can last two minutes: check again before anything is
+            # recorded or sent. If a file has become unreadable meanwhile, the
+            # cycle stops here with nothing mutated and the message still pending.
+            check_state_files()
+
             # Never record an impossible/illegal order as a commitment -- neither
             # a unit we don't control nor a move that isn't legal for it. Applied
             # here, upstream of everything (contradiction-checking, by_recipient,
@@ -697,16 +747,42 @@ def process_bot(api_key: str, state: dict):
         bot_state["commitment_counts"] = commitment_counts
 
 
-def main():
-    state = load_state()
-    print(f"Claude dialogue bot loop starting. Polling every {POLL_INTERVAL_SECONDS}s. Ctrl+C to stop.", flush=True)
-    while True:
+def run_cycle(state: Optional[dict]) -> Optional[dict]:
+    """One polling cycle. Returns the state to carry into the next cycle.
+
+    Both state files are read before any bot is processed. If either is there
+    but unreadable, the bot stays alive and silent: no message is read, Claude
+    is not called, nothing is sent and nothing is written, so the file is never
+    overwritten. The in-memory state is dropped (None is returned) and loaded
+    again from disk on the first cycle where both files are readable -- exiting
+    instead would only make the container restart in a loop.
+
+    While the files are readable the in-memory state is kept from one cycle to
+    the next, as before: the state file is read here only to check it.
+    """
+    try:
+        on_disk = check_state_files()
+        if state is None:
+            state = on_disk
         for api_key in API_KEYS:
             try:
                 process_bot(api_key, state)
+            except UnreadableStateFile:
+                raise  # not a per-bot error: stop the whole cycle, see below
             except Exception as e:
                 print(f"[{api_key}] unexpected error: {e}", flush=True)
         save_state(state)
+    except UnreadableStateFile as e:
+        print(f"[silent] {e}", flush=True)
+        return None
+    return state
+
+
+def main():
+    print(f"Claude dialogue bot loop starting. Polling every {POLL_INTERVAL_SECONDS}s. Ctrl+C to stop.", flush=True)
+    state = None
+    while True:
+        state = run_cycle(state)
         time.sleep(POLL_INTERVAL_SECONDS)
 
 

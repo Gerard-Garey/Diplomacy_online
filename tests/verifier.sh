@@ -17,7 +17,16 @@ while IFS= read -r f; do
 import ast, sys
 ast.parse(open(sys.argv[1], encoding="utf-8").read(), sys.argv[1])
 PY
-done < <(find cicero/overlay webdiplomacy/overlay -name '*.py')
+done < <(find cicero/overlay webdiplomacy/overlay tests -name '*.py')
+
+# Tests par appel direct, sans amont/ ni conteneur (modules de Cicero remplacés par des doublures).
+# En cas d'échec, la sortie entière est affichée : elle nomme les tests en cause.
+if sortie=$(python3 tests/test_etat_dialogue.py 2>&1); then
+  echo "$sortie" | tail -n 3
+else
+  echo "$sortie"
+  ko "tests/test_etat_dialogue.py (voir ci-dessus)"
+fi
 
 for p in cicero/patches/*.patch webdiplomacy/patches/*.patch; do
   [ -s "$p" ] || ko "patch vide : $p"
