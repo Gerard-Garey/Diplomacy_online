@@ -10,7 +10,8 @@ Ce dépôt ne contient **que ce que le projet ajoute** aux deux logiciels d'amon
 |---|---|
 | Fonctionnement de l'ensemble (ordres, dialogue, promesses) | Éprouvé sur des parties réelles, sur la machine d'origine |
 | `install.sh` jusqu'à la préparation des amonts (clonage, patchs, configuration, dépendances PHP) | Vérifié par un essai à blanc |
-| **Construction de l'image Cicero par le `Dockerfile` de ce dépôt** | **Non encore validée.** L'image utilisée jusqu'ici copiait un environnement compilé à la main ; le `Dockerfile` transcrit cette compilation étape par étape mais n'a pas encore été exécuté de bout en bout. |
+| Construction de l'image Cicero par le `Dockerfile` de ce dépôt | Validée le 2026-10-03 sur la machine d'origine : build complet depuis les sources en 20 min environ, image de 16,7 Go ; PyTorch y voit le GPU, `pydipcc`, `postman` et les protos s'importent |
+| **Démarrage de la pile depuis ce dépôt (`demarrer.sh`, `arreter.sh`), partie jouée avec la nouvelle image** | **Non encore validé** |
 | Interface « beta » (React) de webDiplomacy | Non construite par `install.sh` ; l'interface classique suffit pour jouer |
 
 ## Prérequis
@@ -27,7 +28,7 @@ Ce dépôt ne contient **que ce que le projet ajoute** aux deux logiciels d'amon
 git clone https://github.com/Gerard-Garey/Diplomacy_online.git
 cd Diplomacy_online
 cp env.exemple .env        # puis y coller le jeton obtenu par `claude setup-token`
-./install.sh                # 1 à 2 h : clonage, patchs, poids de modèle, compilation
+./install.sh                # 20 à 30 min : clonage, patchs, poids de modèle, compilation
 ./demarrer.sh
 ```
 
