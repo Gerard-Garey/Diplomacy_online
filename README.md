@@ -11,8 +11,9 @@ Ce dépôt ne contient **que ce que le projet ajoute** aux deux logiciels d'amon
 | Fonctionnement de l'ensemble (ordres, dialogue, promesses) | Éprouvé sur des parties réelles, sur la machine d'origine |
 | `install.sh` jusqu'à la préparation des amonts (clonage, patchs, configuration, dépendances PHP) | Vérifié par un essai à blanc |
 | Construction de l'image Cicero par le `Dockerfile` de ce dépôt | Validée le 2026-10-03 sur la machine d'origine : build complet depuis les sources en 20 min environ, image de 16,7 Go ; PyTorch y voit le GPU, `pydipcc`, `postman` et les protos s'importent |
-| **Démarrage de la pile depuis ce dépôt (`demarrer.sh`, `arreter.sh`), partie jouée avec la nouvelle image** | **Non encore validé** |
-| Interface « beta » (React) de webDiplomacy | Non construite par `install.sh` ; l'interface classique suffit pour jouer |
+| Démarrage de la pile depuis ce dépôt, sur une base vide | Validé le 2026-10-03 : inscription d'un joueur, partie créée contre six bots, ordres soumis par les six, réponse de Claude à un message, données conservées après `arreter.sh` puis `demarrer.sh` |
+| **Interface « beta » (React, carte cliquable) de webDiplomacy** | **Non construite par `install.sh`** : `beta/` répond 404. Choisir l'interface à menus déroulants (voir « Première partie ») |
+| Serveur d'événements (`webdiplomacy-sse`) | Démarre, mais ne joint pas Redis faute de configuration ; sans effet constaté sur l'interface classique |
 
 ## Prérequis
 
@@ -32,14 +33,22 @@ cp env.exemple .env        # puis y coller le jeton obtenu par `claude setup-tok
 ./demarrer.sh
 ```
 
-Le site est alors sur <http://localhost:43000>. La base de données est créée vide au premier démarrage, avec les comptes `bot1` à `bot7` et leurs clés d'API (script `install/createBotAccounts.sql` d'amont). Créer son compte joueur par `register.php` ; en développement, le courriel de validation arrive dans MailHog, sur <http://localhost:43001>.
+Le site est alors sur <http://localhost:43000>. La base de données est créée vide au premier démarrage, avec les comptes `bot1` à `bot7`, leurs clés d'API et la variante Classic.
+
+### Première partie
+
+1. Créer son compte par `register.php`. Le courriel de validation arrive dans MailHog, sur <http://localhost:43001> : suivre son lien.
+2. Dans le formulaire du compte, choisir **« Dropdown menus »** pour « Default map UI » : l'interface cliquable n'est pas construite, et une partie ouverte avec elle renvoie une erreur 404. Un compte déjà créé ouvre une partie par `board.php?gameID=<n>&view=dropDown`.
+3. Créer la partie par « Start an AI/Bot Game » (`botgamecreate.php`), variante Classic. Les six bots la rejoignent aussitôt ; les messages y sont ouverts (presse « Regular »).
+
+Les bots soumettent leurs ordres en quelques minutes, et le bot de dialogue relève les messages toutes les 60 s.
 
 `./install.sh` est relançable : une étape déjà faite est sautée. Options : `--sans-build`, `--sans-modeles`.
 
 | Commande | Effet |
 |---|---|
 | `./demarrer.sh` | Démarre webDiplomacy, initialise Redis, démarre les conteneurs `cicero-orders` et `cicero-dialogue` |
-| `./arreter.sh` | Arrête tout ; la base et les parties sont conservées |
+| `./arreter.sh` | Arrête tout ; la base et les parties sont conservées (volume Docker `webdiplomacy_webdiplomacy-db-data`) |
 | `amont/cicero/check_orders.sh <gameID>` | Affiche les ordres que chaque bot a en cache pour la phase en cours |
 | `bash tests/verifier.sh` | Batterie statique (syntaxe, patchs, absence de secret et de chemin personnel) |
 

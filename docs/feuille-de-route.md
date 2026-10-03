@@ -10,7 +10,7 @@ Mise à jour du 2026-10-02 — `main` : `450f159`.
 - **Périmètre** (fermé ; import initial, sans issue préalable) :
   - [x] Adapter le modèle au projet (règles, sous-agents, glossaire, cahier des charges) — circuit : 4 — résultats : aucun
   - [x] Reporter le projet dans le dépôt (patchs, overlay, scripts d'installation) — circuit : 3 — résultats : aucun (arbres identiques à l'origine, ADR 0002)
-  - [ ] Valider `cicero/overlay/Dockerfile` par un build complet — différé par le mainteneur (M3)
+  - [x] Valider `cicero/overlay/Dockerfile` par un build complet, puis le démarrage sur base vide — fait le 2026-10-03 (tête `d0daffd` et suivantes), circuit : 3 — résultats : aucun
 - **Revue finale complète** : `audit`, `expert-webdip` (installation)
 
 ## 2. Branches suivantes
