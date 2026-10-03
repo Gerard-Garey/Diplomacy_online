@@ -1,0 +1,22 @@
+diff --git a/tools/pybind11Tools.cmake b/tools/pybind11Tools.cmake
+index e3ec572b..e888678b 100644
+--- a/tools/pybind11Tools.cmake
++++ b/tools/pybind11Tools.cmake
+@@ -23,7 +23,7 @@ if(NOT PYBIND11_CPP_STANDARD AND NOT CMAKE_CXX_STANDARD)
+     check_cxx_compiler_flag("-std=c++14" HAS_CPP14_FLAG)
+ 
+     if (HAS_CPP14_FLAG)
+-      set(PYBIND11_CPP_STANDARD -std=c++14)
++      set(PYBIND11_CPP_STANDARD -std=c++17)
+     else()
+       check_cxx_compiler_flag("-std=c++11" HAS_CPP11_FLAG)
+       if (HAS_CPP11_FLAG)
+@@ -33,7 +33,7 @@ if(NOT PYBIND11_CPP_STANDARD AND NOT CMAKE_CXX_STANDARD)
+       endif()
+     endif()
+   elseif(MSVC)
+-    set(PYBIND11_CPP_STANDARD /std:c++14)
++    set(PYBIND11_CPP_STANDARD /std:c++17)
+   endif()
+ 
+   set(PYBIND11_CPP_STANDARD ${PYBIND11_CPP_STANDARD} CACHE STRING

@@ -1,0 +1,15 @@
+Diplomacy_online assemble deux logiciels tiers, qu'il ne redistribue pas :
+ils sont clonés depuis leurs dépôts d'origine par install.sh.
+
+1. Cicero — https://github.com/facebookresearch/diplomacy_cicero
+   Code sous licence MIT (Copyright Meta Platforms, Inc. and affiliates).
+   Poids de modèle sous CC BY-NC 4.0 : usage non commercial uniquement.
+   Les fichiers de cicero/patches sont des modifications de ce code, sous MIT.
+
+2. webDiplomacy — https://github.com/kestasjk/webDiplomacy
+   Sous licence GNU Affero General Public License v3.0.
+   Les fichiers du dossier webdiplomacy/ de ce dépôt (patchs et fichiers
+   ajoutés) en sont des œuvres dérivées : ils sont placés sous AGPL-3.0,
+   dont le texte figure dans le dépôt d'amont (fichier LICENSE) et à https://www.gnu.org/licenses/agpl-3.0.html.
+
+Tout le reste de ce dépôt est sous licence MIT (fichier LICENSE).

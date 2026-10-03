@@ -1,10 +1,10 @@
 # Suivi des issues : GitHub
 
-Les issues et les specs de ce dépôt sont des issues GitHub de `<propriétaire>/<dépôt>` (**À ADAPTER**). **La voie d'accès dépend de l'environnement**, et les deux coexistent : la CLI `gh` sur le poste local, les outils `mcp__github__*` en session cloud.
+Les issues et les specs de ce dépôt sont des issues GitHub de `Gerard-Garey/Diplomacy_online`. **La voie d'accès dépend de l'environnement**, et les deux coexistent : la CLI `gh` sur le poste local, les outils `mcp__github__*` en session cloud.
 
 | | Poste local | Session cloud |
 |---|---|---|
-| `gh` | installé (`winget install GitHub.cli`) et authentifié (`gh auth login`) | **absent** |
+| `gh` | installé (`sudo apt install gh`) et authentifié (`gh auth login`) | **absent** |
 | outils `mcp__github__*` | disponibles | disponibles |
 | `GH_TOKEN` / `GITHUB_TOKEN` | — | présents dans l'environnement |
 
@@ -23,7 +23,7 @@ Chaque opération, dans les deux voies :
 | Libellés | `mcp__github__issue_write`, `method: "update"`, champ `labels` | `gh issue edit <n> --add-label` / `--remove-label` |
 | Fermer | `mcp__github__issue_write`, `method: "update"`, `state: "closed"` et `state_reason` | `gh issue close <n> --comment "..."` |
 
-`owner` et `repo` sont ceux du dépôt (**À ADAPTER**). Avec `gh`, le dépôt se déduit de `git remote -v`, automatiquement dans un clone.
+`owner` et `repo` sont `Gerard-Garey` et `Diplomacy_online`. Avec `gh`, le dépôt se déduit de `git remote -v`, automatiquement dans un clone.
 
 Les outils `mcp__github__*` peuvent être différés : s'ils ne figurent pas dans la liste d'outils, les charger avec `ToolSearch` (`select:mcp__github__issue_read`, par exemple). Les sous-agents, eux, n'ont ni `ToolSearch` ni d'autre moyen d'en charger : ils ne disposent que des outils de leur frontmatter.
 

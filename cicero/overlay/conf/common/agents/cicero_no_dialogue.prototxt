@@ -1,0 +1,71 @@
+includes { path: "searchbot/qre_rol0_p30.prototxt"; mount: "bqre1p.base_searchbot_cfg" }
+includes { path: "orders/20220305_allorderindependentrollout_bilateralprefix.prototxt"; mount: "bqre1p.base_searchbot_cfg.parlai_model_orders" }
+
+bqre1p {
+    base_searchbot_cfg {
+      model_path: "models/rl_search_orders.ckpt"
+      value_model_path: "models/rl_value_function.ckpt"
+
+      br_corr_bilateral_search {
+        enable_for_pseudo_order: True
+        enable_for_final_order: True
+        use_all_power_for_p_joint: True
+        br_regularize_lambda: 1e-2
+        min_unnormalized_weight: 0.02
+        max_unnormalized_weight: 10
+        bilateral_search_num_cond_sample: 10
+
+        # Fed only by the dialogue bot's private "sincere" channel (bluffs are
+        # excluded at the source), and restricted to orders the search itself
+        # already considered -- so a hallucinated promise is inert.
+        enable_pseudo_commitments: True
+        pseudo_commitment_boost: 3.0
+        # Each injected action costs ~+8% rollouts; 2 keeps that bounded and
+        # limits the argmax-over-noisy-estimates effect.
+        pseudo_commitment_max_injected: 2
+      }
+
+      rollouts_cfg {
+          year_spring_prob_of_ending: "1901,0.0;1909,1.0"
+      }
+
+      plausible_orders_cfg {
+        do_parlai_rescoring: true
+        n_rescore: 30
+        parlai_req_size: 30
+        parlai_batch_size: 30
+        n_plausible_orders: 35
+        batch_size: 512
+        allow_multi_gpu: 1
+        exclude_n_holds: 3
+      }
+
+      bp_iters: 0
+      n_rollouts: 32
+      loser_bp_value: 0
+      loser_bp_iter: 0
+
+      do_incremental_search: true
+      use_greedy_po_for_rollout: true
+      half_precision: true
+
+      parlai_model_orders {
+        model_path: "models/cicero_imitation_bilateral_orders_prefix"
+      }
+    }
+    player_types {
+      log_uniform {
+        min_lambda: 1e-3
+        max_lambda: 3e-1
+      }
+    }
+    do_bayesian_updates: False
+    num_player_types: 6
+    agent_type: 2
+    agent_type_is_public: false
+
+    scale_lambdas_1901_spring: 10.0
+    dynamic_lambda_stdev_espilon: 0.01
+    dynamic_lambda_stdev_baseline: 0.05
+    dynamic_lambda_stdev_num_samples: 100
+}

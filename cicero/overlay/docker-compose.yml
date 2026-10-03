@@ -1,0 +1,44 @@
+services:
+  cicero-orders:
+    image: cicero-webdip:latest
+    container_name: cicero-orders
+    command: ["orders"]
+    restart: unless-stopped
+    environment:
+      CICERO_REDIS_IP: redis
+      CICERO_REDIS_PORT: "6379"
+    volumes:
+      - ./models:/opt/cicero/models:ro
+      - ./webdip_logs_test:/opt/cicero/webdip_logs_test
+      # Journaux du moteur (valeur et probabilité de chaque action) : sans ce montage
+      # ils vivent dans le conteneur et disparaissent à chaque arrêt de la pile.
+      - ./journaux_moteur:/root/diplomacy_experiments
+    networks:
+      - webdiplomacy_default
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  cicero-dialogue:
+    image: cicero-webdip:latest
+    container_name: cicero-dialogue
+    command: ["dialogue"]
+    restart: unless-stopped
+    environment:
+      WEBDIP_API_URL: "http://webserver/api.php"
+      CICERO_REDIS_IP: redis
+      CICERO_REDIS_PORT: "6379"
+      CLAUDE_CODE_OAUTH_TOKEN: "${CLAUDE_CODE_OAUTH_TOKEN}"
+    volumes:
+      - ./models:/opt/cicero/models:ro
+      - ./webdip_logs_test:/opt/cicero/webdip_logs_test
+    networks:
+      - webdiplomacy_default
+
+networks:
+  webdiplomacy_default:
+    external: true

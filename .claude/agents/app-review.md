@@ -22,7 +22,13 @@ On te dit laquelle on attend ; à défaut, **revue légère** (règle 10 de `CLA
 
 ## Points de contrôle
 
-**À ADAPTER** : un point par exigence d'interface de `docs/exigences.md` (disposition, onglets, saisie, restitution). Toujours :
+L'interface du projet est celle de webDiplomacy, que le projet ne redessine pas ; ta revue porte sur ce que voit le joueur humain (`docs/exigences.md` § 5) :
+
+- **Messages des bots** : jamais de texte brut de modèle, de JSON ni de mention d'IA dans un message envoyé ; langue du message entrant respectée ; pas de message en double après redémarrage d'un conteneur.
+- **Déroulement** : une phase se résout sans action d'administration (`Reset last process time`) dès que tous les joueurs sont prêts.
+- **Scripts** : `install.sh`, `demarrer.sh`, `arreter.sh` et `check_orders.sh` échouent avec un message qui dit quoi faire.
+
+Toujours :
 
 - **Aucun calcul hors du module de calcul** : repère toute statistique, tout seuil métier codé en dur ou toute transformation quantitative dans les fichiers d'interface.
 - **Saisie** : contrôle des entrées avec message explicite ; aucune donnée modifiée silencieusement.

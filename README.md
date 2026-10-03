@@ -1,82 +1,93 @@
-# Modele_vibe_code — modèle d'organisation Claude Code
+# Diplomacy_online
 
-Modèle de dépôt pour mener un projet avec Claude Code : sous-agents spécialisés, circuits de travail, règles Git et GitHub, traçabilité des changements de résultats. Il ne contient aucun code métier ; chaque projet part de ce modèle et remplit les passages marqués **À ADAPTER**.
+Jouer à Diplomacy sur une instance locale de [webDiplomacy](https://github.com/kestasjk/webDiplomacy) contre six bots dont la stratégie est calculée par [Cicero](https://github.com/facebookresearch/diplomacy_cicero) (Meta) et dont la négociation en langage naturel est écrite par Claude.
 
-Travail en cours.
+Ce dépôt ne contient **que ce que le projet ajoute** aux deux logiciels d'amont : des patchs, des fichiers nouveaux, et les scripts qui assemblent le tout. Les amonts sont clonés à des commits épinglés lors de l'installation.
 
-## Contenu
+## État
 
-| Chemin | Rôle |
+| Élément | État |
 |---|---|
-| `CLAUDE.md` | Règles lues par Claude Code à chaque session : Git et GitHub, architecture, changements de résultats, rigueur, sous-agents, circuits, workflows |
-| `.claude/agents/` | Six sous-agents : `architect` (pilotage), `expert` (fond, à spécialiser), `coder`, `docwriter` (réalisation), `audit`, `app-review` (vérification) |
-| `.claude/agents/*-approfondi.md` | Variantes de jugement d'`architect` et d'`expert` (effort `high`), générées par `.claude/outils/fiches_jumelles.sh` |
-| `docs/agents/routage.md` | Politique de routage du modèle et de l'effort d'`architect` et d'`expert` (ADR 0001) |
-| `.claude/hooks/journal_agents.sh`, `.claude/outils/bilan_journal.sh` | Journal local des sous-agents terminés (hook `SubagentStop`) et son bilan |
-| `.claude/workflows/circuit-technique.js` | Circuit `coder` → batteries → `audit` léger, une reprise au plus, sans commit ni push |
-| `.claude/settings.json`, `.claude/hooks/` | Permissions, hooks (installation des plugins `mattpocock-skills` et `document-skills`, journal des sous-agents) |
-| `CONTEXT.md` | Glossaire du domaine et de l'organisation |
-| `docs/exigences.md` | Gabarit du cahier des charges |
-| `docs/feuille-de-route.md` | Gabarit de la feuille de route tenue par `architect` |
-| `docs/adr/` | Décisions consignées (gabarit `0000-gabarit.md`) |
-| `docs/agents/` | Suivi des issues (GitHub, `gh` ou MCP), libellés de tri, documentation du domaine |
-| `.github/` | Modèles d'issue et de PR, CI minimale, Dependabot |
+| Fonctionnement de l'ensemble (ordres, dialogue, promesses) | Éprouvé sur des parties réelles, sur la machine d'origine |
+| `install.sh` jusqu'à la préparation des amonts (clonage, patchs, configuration, dépendances PHP) | Vérifié par un essai à blanc |
+| Construction de l'image Cicero par le `Dockerfile` de ce dépôt | Validée le 2026-10-03 sur la machine d'origine : build complet depuis les sources en 20 min environ, image de 16,7 Go ; PyTorch y voit le GPU, `pydipcc`, `postman` et les protos s'importent |
+| Démarrage de la pile depuis ce dépôt, sur une base vide | Validé le 2026-10-03 : inscription d'un joueur, partie créée contre six bots, ordres soumis par les six, réponse de Claude à un message, données conservées après `arreter.sh` puis `demarrer.sh` |
+| Interface « beta » (React, carte cliquable) de webDiplomacy | Construite par `install.sh` depuis le 2026-10-03 (1 min 30) : le mainteneur y a saisi ses ordres et envoyé un message dans la partie d'essai, phase résolue |
+| Serveur d'événements (`webdiplomacy-sse`) | Configuré depuis le 2026-10-03 : il écoute et joint Redis, `/events` répond. Le rafraîchissement automatique de l'interface cliquable n'a pas été observé à l'écran |
 
-## Démarrer un projet à partir du modèle
+## Prérequis
 
-1. Créer le dépôt avec « Use this template » sur `Gerard-Garey/Modele_vibe_code`, puis appliquer « Sécurité du dépôt » ci-dessous : ni les réglages, ni le ruleset, ni les libellés ne sont copiés par le modèle.
-2. Remplir chaque passage **À ADAPTER** : `grep -rn "À ADAPTER\|A ADAPTER" .`
-   - `CLAUDE.md` : contexte, dépôt de référence, batteries de vérification, domaines de commit, architecture, exigences de rigueur ;
-   - `.claude/agents/expert.md` : spécialité et sources qui font foi (dupliquer la fiche si le projet a besoin de deux experts, par ex. méthode et réglementation) ;
-   - `.claude/workflows/circuit-technique.js` : `BATTERIES` et `ZONES_PROTEGEES` ;
-   - `docs/exigences.md`, `CONTEXT.md` ;
-   - `.github/workflows/ci.yml` : jobs de tests, à ajouter aux contrôles requis du ruleset.
-3. Adapter les critères de routage du modèle et de l'effort (ci-dessous, « Routage du modèle et de l'effort »).
-4. Retirer les agents inutiles (par ex. `app-review` sans interface) et leurs mentions dans `CLAUDE.md`.
-5. Créer les libellés d'issues (« Use this template » ne les copie pas) : `bash .github/creer_labels.sh OWNER/REPO` — libellés de tri de `docs/agents/triage-labels.md`, plus `bug`, `enhancement` et `documentation`.
-6. Premier travail : demander à `architect` le plan de la première branche de travail.
+- Ubuntu avec un GPU NVIDIA d'au moins 8 Go, pilote installé ;
+- Docker, le plugin `docker compose` et `nvidia-container-toolkit` (`docker run --rm --gpus all ubuntu:26.04 nvidia-smi` doit afficher le GPU) ;
+- `git`, `wget`, `gpg` ;
+- environ 25 Go de disque, et de la mémoire : la compilation est volontairement séquentielle (`-j1`) parce que la compilation parallèle a fait tomber la machine d'origine ;
+- un abonnement Claude, pour le jeton du bot de dialogue.
 
-## Façon de travailler
-
-- **Une branche de travail à la fois**, au périmètre fermé d'issues, PR brouillon dès la création ; fusion par le mainteneur, par commit de fusion, CI verte.
-- **Ceux qui écrivent ne vérifient pas, ceux qui vérifient n'écrivent pas** ; un agent n'entre dans le circuit que si la modification touche son domaine.
-- **Toute affirmation sur le code s'adosse à une mesure** exécutée ; tout changement de résultat a son tableau avant / après et son visa.
-- **Audit léger en cours, revue finale complète avant la sortie du brouillon** ; documentation écrite une seule fois, en fin de branche.
-- **Les issues ne sont créées qu'avec l'accord du mainteneur** ; les workflows ne commitent, ne poussent et ne créent rien.
-
-Détail : `CLAUDE.md`.
-
-## Routage du modèle et de l'effort
-
-`architect` et `expert` tournent sur Opus par défaut : effort `medium` pour la routine et `high` pour le jugement, Fable réservé à une liste fermée de cas ou à l'accord du mainteneur, avec des plafonds d'escalade (`docs/agents/routage.md`, ADR 0001).
-
-**Cette politique est un point de départ.** Chaque projet créé à partir du modèle peut, et doit, définir ses propres critères d'escalade du modèle et de l'effort selon son domaine, son architecture, ses risques et ses contraintes, puis les réévaluer à mesure qu'il évolue (après les premières consultations réelles, puis à chaque point d'étape d'`architect`).
-
-- **Où** : les critères (matrice, contrats partagés, seuil « macro », plafonds) dans `docs/agents/routage.md` ; l'effort et le plafond de tours de routine dans le frontmatter d'`architect.md` et d'`expert.md` ; les rôles dédoublés, l'effort et le plafond de jugement dans les variables `ROLES`, `EFFORT_APPROFONDI` et `TOURS_APPROFONDI` de `.claude/outils/fiches_jumelles.sh`, puis `bash .claude/outils/fiches_jumelles.sh` pour régénérer les fiches `-approfondi`.
-- **Articulation** : les règles de `CLAUDE.md` priment (visa, décisions réservées au mainteneur, deux lectures d'une source) ; la politique ne fait que choisir la fiche et le modèle d'une consultation.
-- **Vérification** : `bash .claude/outils/fiches_jumelles.sh --verifier` (aussi en CI) ; puis, dans une **session neuve** (les fiches ne sont pas rechargées en cours de session), une consultation de chaque fiche et `bash .claude/outils/bilan_journal.sh`, qui affiche le modèle réellement servi ; les escalades, relances ciblées et arrêts sont notés dans la PR (section « Escalades, relances et arrêts »).
-- **Exemple** : un projet de calcul réglementaire déclare comme contrats partagés sa table de paramètres et son format d'entrée, abaisse le seuil « macro » à une seule couche de calcul touchée, ajoute un expert `regulatory` à `ROLES`, et passe la validation après audit en jugement.
-- **Limites** : un plafond de tours n'est pas un plafond de tokens, une réponse courte ne borne pas le raisonnement, l'effort effectif n'est pas observable dans le journal, et la politique ne supprime pas les angles morts des modèles.
-
-## Sécurité du dépôt
-
-Réglages appliqués au modèle, à reproduire sur tout dépôt créé depuis lui (`OWNER/REPO` à remplacer) ; indispensables si le dépôt est public :
-
-- fusion par **commit de fusion seulement** (squash et rebase désactivés), wiki désactivé ;
-- **secret scanning** et **push protection** activés ; **alertes et correctifs de sécurité Dependabot** activés ;
-- Actions limitées à celles de GitHub (`github_owned_allowed`), jeton des workflows en lecture seule, actions épinglées par SHA ;
-- ruleset **« Protection main »** : suppression et force-push interdits, PR obligatoire (fusion par commit de fusion, fils de discussion résolus), contrôle requis « Contrôles du dépôt » à jour avec `main`, sans contournement.
+## Installation
 
 ```bash
-R=OWNER/REPO
-gh api -X PATCH repos/$R -F allow_squash_merge=false -F allow_rebase_merge=false -F allow_merge_commit=true -F has_wiki=false \
-  -f 'security_and_analysis[secret_scanning][status]=enabled' -f 'security_and_analysis[secret_scanning_push_protection][status]=enabled'
-gh api -X PUT repos/$R/vulnerability-alerts
-gh api -X PUT repos/$R/automated-security-fixes
-gh api -X PUT repos/$R/actions/permissions -F enabled=true -f allowed_actions=selected
-gh api -X PUT repos/$R/actions/permissions/selected-actions -F github_owned_allowed=true -F verified_allowed=false
-gh api -X PUT repos/$R/actions/permissions/workflow -f default_workflow_permissions=read -F can_approve_pull_request_reviews=false
-gh api -X POST repos/$R/rulesets --input .github/ruleset-main.json
+git clone https://github.com/Gerard-Garey/Diplomacy_online.git
+cd Diplomacy_online
+cp env.exemple .env        # puis y coller le jeton obtenu par `claude setup-token`
+./install.sh                # 20 à 30 min : clonage, patchs, poids de modèle, compilation
+./demarrer.sh
 ```
 
-Le ruleset est dans `.github/ruleset-main.json`. L'appliquer **après** le premier push sur `main`, qu'il bloque ensuite.
+Le site est alors sur <http://localhost:43000>. La base de données est créée vide au premier démarrage, avec les comptes `bot1` à `bot7`, leurs clés d'API et la variante Classic.
+
+### Première partie
+
+1. Créer son compte par `register.php`. Une épreuve anti-robot demande de cliquer sur la carte les centres de ravitaillement d'un pays. Le courriel de validation arrive ensuite dans MailHog, sur <http://localhost:43001> : suivre son lien.
+2. Compléter le formulaire du compte. L'interface par défaut est la carte cliquable ; l'interface à menus déroulants reste disponible (« Dropdown menus », ou `board.php?gameID=<n>&view=dropDown`).
+3. Créer la partie par « Start an AI/Bot Game » (`botgamecreate.php`), variante Classic. Les six bots la rejoignent aussitôt ; les messages y sont ouverts (presse « Regular »). **Ne pas cliquer sur « join the queue »** : la file « full-press » de l'amont cherche des bots qui n'existent pas ici, et la partie serait créée sans adversaire.
+
+Les bots soumettent leurs ordres en quelques minutes, et le bot de dialogue relève les messages toutes les 60 s.
+
+À savoir :
+
+- seule la variante Classic est proposée ; un compte ordinaire est limité à trois parties contre bots en cours ;
+- aucun compte administrateur n'est créé ;
+- les ports ne sont publiés que sur `127.0.0.1` : le site n'est pas joignable depuis une autre machine ;
+- après un redémarrage de la machine, relancer `./demarrer.sh` : il rend aux parties en cours la durée de l'arrêt ;
+- les journaux du moteur (valeur et probabilité de chaque action, par partie et par puissance) sont dans `amont/cicero/journaux_moteur` ;
+- `bot-service` (bots élémentaires qui tiennent leurs positions) reste dans le dépôt sous le profil `bots`, qu'aucun script ne lance. **Ne pas le démarrer à côté de Cicero** : il validerait des ordres à sa place.
+
+`./install.sh` est relançable : une étape déjà faite est sautée. Options : `--sans-build`, `--sans-modeles`.
+
+| Commande | Effet |
+|---|---|
+| `./demarrer.sh` | Démarre webDiplomacy, initialise Redis, démarre les conteneurs `cicero-orders` et `cicero-dialogue` |
+| `./arreter.sh` | Arrête tout ; la base et les parties sont conservées (volume Docker `webdiplomacy_webdiplomacy-db-data`) |
+| `amont/cicero/check_orders.sh <gameID>` | Affiche les ordres que chaque bot a en cache pour la phase en cours |
+| `bash tests/verifier.sh` | Batterie statique (syntaxe, patchs, absence de secret et de chemin personnel) |
+
+## Organisation du dépôt
+
+| Chemin | Contenu |
+|---|---|
+| `versions.env` | Commits d'amont épinglés et liste des poids de modèle nécessaires |
+| `cicero/patches/` | Modifications de fichiers existants de Cicero et de deux de ses sous-modules |
+| `cicero/overlay/` | Fichiers nouveaux copiés dans l'arbre Cicero : `Dockerfile`, bot de dialogue, configuration de l'agent, export du plan, engagements |
+| `webdiplomacy/patches/`, `webdiplomacy/overlay/` | Idem pour webDiplomacy |
+| `install.sh`, `demarrer.sh`, `arreter.sh` | Installation et exploitation |
+| `outils/exporter_patchs.sh` | Reporte dans le dépôt le travail fait dans `amont/` |
+| `docs/doc/architecture.md` | Fonctionnement d'ensemble ; **à lire en premier** |
+| `docs/exigences.md`, `docs/adr/`, `docs/feuille-de-route.md` | Cahier des charges, décisions, plan |
+| `CLAUDE.md`, `.claude/`, `CONTEXT.md` | Règles de travail avec Claude Code, sous-agents, glossaire |
+
+## Développer
+
+On travaille dans `amont/cicero` et `amont/webdiplomacy`, qui sont des arbres complets et testables, puis on reporte :
+
+```bash
+outils/exporter_patchs.sh              # régénère les patchs
+outils/exporter_patchs.sh --verifier   # échoue si le dépôt est en retard sur amont/
+```
+
+Un fichier **nouveau** se copie à la main dans le dossier `overlay/` correspondant. Le code Cicero est copié dans l'image, non monté : toute modification demande `./install.sh` (reconstruction) puis `./demarrer.sh`.
+
+Règles de contribution (branche unique, PR brouillon, visa des changements de comportement) : `CLAUDE.md`.
+
+## Licences
+
+Voir `NOTICE`. En bref : les fichiers de ce dépôt sont sous licence MIT, sauf `webdiplomacy/`, dérivé d'un logiciel AGPL-3.0 et placé sous cette licence. Les poids de modèle de Cicero, téléchargés à l'installation et jamais redistribués ici, sont sous CC BY-NC 4.0 : **usage non commercial**.
