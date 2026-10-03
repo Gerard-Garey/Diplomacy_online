@@ -4,7 +4,7 @@ Tenue par `architect`, après chaque série de PR fusionnées. Chaque mise à jo
 
 ## 1. Branche de travail en cours
 
-Mise à jour du 2026-10-03 (seconde, après l'ADR 0004) — `main` : `a9566a2` (fusion de la PR #1) ; `claude/promesses` : `7372dcf`, PR brouillon #16. Première mise à jour du même jour : `2d5294f`.
+Mise à jour du 2026-10-03 (troisième, après la révision de l'ADR 0004) — `main` : `a9566a2` (fusion de la PR #1) ; `claude/promesses` : `0fdb5bf`, PR brouillon #16. Mises à jour précédentes du même jour : `2d5294f`, puis `41e009f` (sur `7372dcf`).
 
 - **Branche** : `claude/promesses` — PR #16, brouillon.
 - **Objet** : logique des promesses. Périmètre fixé par le mainteneur le 2026-10-03 (M10, M11), étendu le même jour sur son accord : trahison retirée chez tous les destinataires (avec #2, M19), réponse vide et sourdine (avec #5, M17), issue #17 (M24), qui remplace la tâche T5 telle que spécifiée et implémente #3 ; #3 reste dans le périmètre et est fermée par le même travail.
@@ -12,10 +12,10 @@ Mise à jour du 2026-10-03 (seconde, après l'ADR 0004) — `main` : `a9566a2` (
   - [x] T1 — option « partie 100 % bots » — #12 : script en ligne de commande (`e0624e6`) ; partie `gameID=3` créée le 2026-10-03, elle avance seule ; critères d'exécution A1 à A5 en cours de levée (dans l'issue)
   - [x] T2 — banc déterministe (`7372dcf` : `tests/banc_promesses.py`, `tests/test_promesses.py`, `tests/mesure_promesses.py`, cibles en échecs attendus) ; la mesure « avant » répétée (appels réels à Claude) reste à faire avant les commits de fond
   - [x] T3 — #5, volet technique (écriture atomique, garde de `load_state`, bot muet sur fichier illisible) — `e351abf` ; résultats : aucun ; réserves mineures d'`audit` reprises avec T7
-  - [ ] T4 — #2 — implémenté dans l'arbre de travail, non commité, en audit — résultat changé (`sincere`)
-  - [ ] T5 — #17, qui spécifie et implémente #3 (trahison déclarée, mémoire des promesses du bot, index `order_values`) — ADR 0004 — résultat changé (`sincere`, `[betrayal]`, consigne)
-  - [ ] T6 — #4 — résultat changé (probabilité des actions, donc ordres tirés)
-  - [ ] T7 — #5, volet de fond (journal d'envoi, trois essais, réponse vide, sourdine) — résultat changé (`sincere`)
+  - [ ] T4 — #2 — fait et audité, dans l'arbre de travail, non commité (attend le visa) — résultat changé (`sincere`)
+  - [ ] T5 — #17, qui spécifie et implémente #3 (trahison déclarée, mémoire des promesses du bot, index `order_values`) — ADR 0004 révisé — partie déterministe et consigne faites et auditées, non commitées ; **à reprendre après T6** pour la grandeur comparée (M25), la condition (e) (M26), la marge 0,05 (M27), la table (M28), la révision séquentielle (M29) et le bornage « free » (M30) — résultat changé (`sincere`, `[betrayal]`, consigne, `current_plans.json`)
+  - [ ] T6 — #4 — **en cours** ; renfort gradué en fonction pure, commune au moteur et au bot de dialogue (`pseudo_commitments.py`), dont dépend la condition (e) — résultat changé (probabilité des actions, donc ordres tirés)
+  - [ ] T7 — #5, volet de fond (journal d'envoi, trois essais, réponse vide, sourdine) — après la reprise de T5 — résultat changé (`sincere`)
   - [ ] T8 — mesure « après », tableau avant / après unique, visa du mainteneur
   - [ ] T9 — documentation de fond, un passage (règle 9), textes listés par l'ADR 0004 compris
 
@@ -34,9 +34,9 @@ Ce qui dépend de la spécification des experts est marqué **(experts)** : le p
 | — | mesure « avant » sur le code de rang 5 (aucun commit) | T2 | session principale, protocole d'`expert-cicero` | — | — |
 | 5 bis | `docs:` ADR 0004 (trahison déclarée), annotation de l'ADR 0003, glossaire, feuille de route — le document précède le code (règle 9, exception) | T5 | `architect-approfondi`, routage Fable (§ 4.1.3) | 4 | non |
 | 6 | `cicero:` deux ordres contraires d'un même message, trahison retirée chez tous les destinataires (#2) | T4 | voir § 1.2 | 2 | oui |
-| 7 | `cicero:` trahison déclarée, mémoire des promesses du bot, index `order_values` (#17, ferme #3) | T5 | voir § 1.2 | 1 | oui |
-| 8 | `cicero:` journal d'envoi, trois essais, réponse vide, sourdine (#5) | T7 | voir § 1.2 | 1 | oui |
-| 9 | `cicero:` cible et gradation du renfort de probabilité (#4) | T6 | voir § 1.2 | 2 | oui |
+| 7 | `cicero:` cible et gradation du renfort de probabilité, fonction pure partagée (#4) | T6 | voir § 1.2 | 2 | oui |
+| 8 | `cicero:` trahison déclarée, condition (e), marge 0,05, mémoire des promesses du bot, `order_values`, `candidates` et `search` (#17, ferme #3) | T5 | voir § 1.2 | 1 | oui |
+| 9 | `cicero:` journal d'envoi, trois essais, réponse vide, sourdine (#5) | T7 | voir § 1.2 | 1 | oui |
 | — | mesure « après », tableau unique, **visa du mainteneur** ; les rangs 6 à 9 ne sont commités qu'ensuite | T8 | session principale, `expert-cicero` relit le tableau | — | — |
 | 10 | `tests:` retrait des marques d'échec attendu devenues des succès | T4 à T7 | `coder` → `audit` | 3 | non |
 | 11 | `docs:` un commit par issue | T9 | `docwriter` → `expert` valide le diff | 4 | non |
@@ -46,7 +46,8 @@ Raisons de l'ordre (révisé le 2026-10-03 d'après `expert-cicero`, après la s
 - **Rang 5 avant la mesure « avant »** : le volet technique de #5 ne change aucun résultat ; le placer avant fait que l'écart avant / après ne contient que les quatre modifications de fond, et protège l'état pendant les essais.
 - **#2 avant #17** : même fonction (`_reject_contradictions`, `claude_dialogue_bot.py:163`) ; la règle de #2 (plus d'un ordre entrant pour l'unité : aucun retenu) est la ligne 1 de la table de décision de #17, appliquée avant le label ; #2 corrige aussi la clé `by_recipient[None]`.
 - **#17 avec #3** : #17 reprend la décision de #3 (valeur inconnue → la première promesse tient, index `order_values` exporté par `plan_export.py`) et y ajoute la condition du label ; un seul commit, qui ferme les deux issues.
-- **#5 de fond avant #4** : #5 déplace le point de persistance des engagements (après envoi confirmé), que #17 utilise pour `own_promises` ; il reste côté bot de dialogue. #4 touche le moteur (`apply_commitments_to_policy`, `pseudo_commitments.py:171`) : le placer en dernier fait que les rejeux moteur ne sont faits qu'une fois, sur l'export définitif des engagements.
+- **#4 avant la reprise de #17** (M31, révision du 2026-10-03 ; remplace « #5 de fond avant #4 ») : la condition (e) de l'ADR 0004 appelle la fonction de renfort de #4 (`apply_commitments_to_policy`, `pseudo_commitments.py:171`, à rendre pure et partagée) ; l'écrire deux fois ferait diverger (e) du moteur. Ordre réel des travaux : #2 (fait, audité) ; #17 et #3, partie déterministe et consigne (faites, auditées) ; #4 (en cours) ; reprise de #17 ; #5 de fond ; mesures et visa. Le diff de #17 se construit en deux temps mais reste un seul commit.
+- **#5 de fond en dernier** : #5 déplace le point de persistance des engagements (après envoi confirmé), que #17 utilise pour `own_promises` ; il reste côté bot de dialogue et ne dépend ni de #4 ni de (e). Dépendance retirée : « #4 en dernier pour ne rejouer le moteur qu'une fois » ; les rejeux moteur se font après le rang 8, quand l'export (`candidates`, `search`) est définitif.
 
 ### 1.2 Circuit de chaque issue
 
@@ -77,8 +78,8 @@ Un seul tableau et un seul visa pour #2 à #5, par décision du mainteneur ; les
 | T2 | La procédure rejoue une position sans action humaine et donne, pour #2 à #5, la mesure « avant » ; les tests en échec attendu échouent pour la raison décrite dans l'issue. |
 | T3 | Un fichier d'état tronqué ne fait plus boucler le conteneur (essai sur un fichier tronqué exprès) ; écriture par fichier temporaire et `os.replace`, comme `plan_export.py` ; aucun résultat modifié. |
 | T4 (#2) | Deux ordres contraires pour une même unité dans une même liste `sincere` : un seul au plus est retenu, selon la règle établie par `expert-cicero` ; plus de clé `by_recipient[None]` ni de `"null"` sérialisé. |
-| T5 (#17, #3) | Critères (a) à (g) de l'issue #17 : chaque ligne de la table de décision est un test du banc qui passe, état inchangé dans les cas refusés ; `betray` toujours une liste ; 0 label sur 20 sans conflit, au moins 18 labels exacts sur 20 en conflit ; aucun `reply` ne contient `sincere`, `betray`, une accolade ni la promesse faite à un tiers ; taille de consigne mesurée ; au plus un ordre par unité dans `pseudo_commitments.json`. Pour #3 : valeur inconnue → la première promesse tient ; texte du § 4 de l'architecture, docstring et code concordent ; la mention « écart connu » du § 4 est retirée. |
-| T6 (#4) | Sur l'exemple de l'issue (promesses `A MAR - SPA` et `F BRE - ENG`, politique 0,5 / 0,3 / 0,2), les probabilités obtenues sont celles de la règle établie ; la somme vaut 1 ; aucune valeur d'action n'est modifiée (invariant « le moteur décide »). |
+| T5 (#17, #3) | Critères (a) à (g) de l'issue #17 : chaque ligne de la table de décision (0 à 8, 6 bis comprise) est un test du banc qui passe, état inchangé dans les cas refusés ; `betray` toujours une liste ; 0 label sur 20 sans conflit, au moins 18 labels exacts sur 20 en conflit ; aucun `reply` ne contient `sincere`, `betray`, une accolade ni la promesse faite à un tiers ; taille de consigne mesurée ; au plus un ordre par unité dans `pseudo_commitments.json`. Pour #3 : valeur inconnue → la première promesse tient ; texte du § 4 de l'architecture, docstring et code concordent ; la mention « écart connu » du § 4 est retirée. Révision (M25 à M30) : `order_values` vaut la valeur de l'action de meilleur score contenant l'ordre ; (e) calculée par la fonction de renfort de #4, la même que celle du moteur (un test compare les deux sur une même table) ; `candidates` ou `search` absents → `unknown_value` ; marge 0,05 ; au plus un ordre par unité et par destinataire dans `own_promises.pending` ; aucun coût négatif affiché à Claude, `cost_vs_best` exporté inchangé. |
+| T6 (#4) | Sur l'exemple de l'issue (promesses `A MAR - SPA` et `F BRE - ENG`, politique 0,5 / 0,3 / 0,2), les probabilités obtenues sont celles de la règle établie ; la somme vaut 1 ; aucune valeur d'action n'est modifiée (invariant « le moteur décide ») ; le renfort est une fonction pure, appelée par le moteur et par le bot de dialogue. |
 | T7 (#5) | Un envoi en échec (erreur réseau, statut 4xx ou 5xx simulés) ne laisse aucun engagement enregistré et ne marque pas le message comme répondu ; un message n'est jamais envoyé deux fois (exigence 5.3). |
 | T8 | Tableau complet, chaque ligne expliquée, visé par le mainteneur. |
 | T9 | `docs/doc/architecture.md` § 3 et § 4 et `README.md` concordent avec le code final ; diff validé par `expert`. |
@@ -115,6 +116,7 @@ Recoupements à connaître :
 - #9 et #2, #17 : `test_multiparty.py` dépaquette mal le retour de `_reject_contradictions` ; la signature est touchée dans `claude/promesses` (#2, puis #17 qui ajoute le label en entrée) ; #9 reprend la signature finale, celle que fixe le banc `tests/banc_promesses.py`.
 - #14 et #12 : la garde de l'exigence 2.8 n'a de sens que dans la partie 100 % bots ; la question posée à `architect` par #14 (filtre sur les comptes bots ou silence de la seule puissance scénarisée) se tranche au plan de la branche non-régression, avec les positions de `gameID=3` sous la main.
 - #11 (point 2) et #5 : un JSON illisible remet le fichier à vide ; la garde posée par T3 sur l'état du bot de dialogue est à reprendre pour `current_plans.json`.
+- #11 et #17 : `current_plans.json` reçoit `candidates` (toutes les actions candidates) et `search` (ADR 0004, décision 12) ; le fichier grossit d'autant, à prendre en compte dans la purge des fichiers d'état.
 - #10 (aucun compte administrateur créé) et T1 : la partie 100 % bots est réservée à l'administrateur. Si T1 crée ce compte, ce point de #10 est réglé par `claude/promesses` et s'y note.
 - #10 (motif du correctif du gamemaster dans l'architecture § 5) : le texte actuel du § 5 donne déjà le motif rectifié (`d843896`, `83e2087`) ; à confirmer par `docwriter`, puis à rayer de l'issue.
 - #6 et #7 pendant `claude/promesses` : voir § 1.3, version de la CLI et modèle notés à chaque mesure.
@@ -130,7 +132,7 @@ Aucune : les quinze issues ouvertes (#2 à #15, #17) sont rattachées et triées
 | #4 | `ready-for-agent` | T6 | `claude/promesses` |
 | #5 | `ready-for-agent` | T3 (technique, fait), T7 (fond) | `claude/promesses` |
 | #12 | `enhancement`, `ready-for-agent` | T1 (fait, critères A1 à A5 à lever) | `claude/promesses` |
-| #17 | `enhancement`, `ready-for-agent` | T5 — ADR 0004 | `claude/promesses` |
+| #17 | `enhancement`, `ready-for-agent` | T5 — ADR 0004 (révisé) ; reprise après T6 | `claude/promesses` |
 | #6 | `ready-for-agent` | outils du bot de dialogue, CLI épinglée | installation reproductible |
 | #7 | `ready-for-agent` | versions à épingler | installation reproductible |
 | #8 | `ready-for-agent` | mise à jour de `amont/` | installation reproductible |
@@ -172,6 +174,13 @@ Les quatre points « non vérifiés » de la passation de la PR #1 sont devenus 
 | M22 | 2026-10-03 | Push et ouverture de PR autorisés sans demander sur une branche de travail, hors `main` | PR #16 |
 | M23 | 2026-10-03 | Mesure de la branche : partie déterministe par le banc ; partie répétée par 160 appels réels à Claude (cinq situations, vingt tirages, avant et après), volume approuvé | issue #17 ; § 1.2 |
 | M24 | 2026-10-03 | Trahison déclarée (#17) : (1) une trahison n'est acceptée que déclarée par le label `betray` **et** avec un gain de valeur au-dessus de la marge ; sans label, hallucination, la première promesse tient ; label sans gain suffisant ou valeur inconnue, refusé ; (2) effet moteur inchangé, échange d'engagement, seule la probabilité bouge ; (3) consigne : à qui il a promis quoi, prix d'une rupture, trahison déclarée autorisée, bilan de ses propres promesses pour l'interlocuteur courant seulement ; (4) remplacer une promesse faite au destinataire même : même règle, notée `[revision]`, pas une promesse rompue envers lui ; (5) retrait sans remplacement refusé dans cette branche, occurrences comptées. Précisions : le label reproduit l'ordre promis exact ; #17 remplace #3 et l'implémente | issue #17 ; ADR 0004 ; annotation de l'ADR 0003 |
+| M25 | 2026-10-03 | Trahison, grandeur comparée : pour chaque ordre, la valeur de l'action de meilleur score qui le contient (ce que le moteur jouerait s'il y était tenu), et non la meilleure valeur brute ; la marge reste en valeur ; `order_values` garde son nom, sa définition change. Écartés : comparer des scores, restreindre aux candidats de probabilité non négligeable, garder la meilleure valeur brute. Amende M15 | ADR 0004 (révisé), décision 11 |
+| M26 | 2026-10-03 | Condition (e) : une trahison n'est acceptée que si, en plus du label et de la marge, une action contenant le nouvel ordre prend la tête du classement du moteur après renfort ; calcul dans le bot de dialogue sur la table exportée, clés `candidates` et `search` ajoutées à `current_plans.json`, fonction de renfort commune avec #4. Écarté : accepter la limite connue sans (e) | ADR 0004 (révisé), décision 12 |
+| M27 | 2026-10-03 | Marge fixe portée de 0,02 à 0,05 (« il faut qu'il y ait un coût à la trahison ») ; une seule marge. Écarté : marge croissante avec les ruptures passées | ADR 0004 (révisé), décision 13 |
+| M28 | 2026-10-03 | Table de décision de #17 : ligne 5 étendue (valeur inconnue, ou `candidates` / `search` absents → `unknown_value`) ; ligne 6 bis (label, gain > marge, (e) fausse → `not_played`, la promesse tient, `[betrayal-refused]`) ; ligne 7 : gain > marge et (e) | ADR 0004 (révisé), décision 10 ; issue #17 (table à recopier) |
+| M29 | 2026-10-03 | Révision séquentielle : trahir une promesse faite à X puis promettre sincèrement le nouvel ordre à X avant la résolution est une révision ; l'ancienne promesse sort du bilan envers X (au plus un ordre par unité et par destinataire dans `own_promises.pending`, le dernier dit sincèrement) | ADR 0004 (révisé), décision 6 ; `CONTEXT.md` |
+| M30 | 2026-10-03 | Coûts affichés à Claude : nul ou négatif (≤ 0,0005) → « free », dans la section des promesses et dans la liste des plans (ajout de périmètre) ; `cost_vs_best` exporté inchangé | ADR 0004 (révisé), décision 14 |
+| M31 | 2026-10-03 | Ordre des travaux : #4 (renfort gradué, fonction pure partagée) avant la reprise de #17, dont la condition (e) dépend ; un seul visa pour l'ensemble (M10) | § 1 et § 1.1 ; ADR 0004 (révisé), Conséquences |
 
 ## 5. Escalades, relances et arrêts hors branche
 
