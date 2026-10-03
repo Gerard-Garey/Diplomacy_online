@@ -34,7 +34,8 @@ done
 if grep -rnE '/home/[a-z]+/' --exclude-dir=.git --exclude-dir=amont --exclude-dir=docs --exclude=verifier.sh . ; then
   ko "chemin personnel codé en dur (voir ci-dessus)"
 fi
-if grep -rnE 'sk-ant-[A-Za-z0-9_-]{10,}|CLAUDE_CODE_OAUTH_TOKEN=[A-Za-z0-9_-]{10,}' --exclude-dir=.git --exclude-dir=amont . ; then
+# .env est ignoré par git et contient le jeton par construction ; -l : ne jamais afficher un jeton.
+if grep -rlE 'sk-ant-[A-Za-z0-9_-]{10,}|CLAUDE_CODE_OAUTH_TOKEN="?[A-Za-z0-9_-]{10,}' --exclude-dir=.git --exclude-dir=amont --exclude=.env . ; then
   ko "jeton versionné (voir ci-dessus)"
 fi
 if git ls-files | grep -E '\.(sql\.gz|sqlite|dump)$|claude_dialogue_state\.json|(^|/)config\.php$'; then
