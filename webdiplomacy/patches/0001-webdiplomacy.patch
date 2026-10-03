@@ -161,7 +161,7 @@ index 46b6909b..6e6941a4 100644
                  if( !is_dir(Config::$gameBackupDirectory) )
                  {
 diff --git a/install/gamemaster-entrypoint.sh b/install/gamemaster-entrypoint.sh
-index ccd17a69..8358ba16 100755
+index ccd17a69..835be995 100755
 --- a/install/gamemaster-entrypoint.sh
 +++ b/install/gamemaster-entrypoint.sh
 @@ -69,6 +69,8 @@ else
@@ -173,14 +173,15 @@ index ccd17a69..8358ba16 100755
      echo "DB created"
    fi
  
-@@ -79,7 +81,10 @@ else
+@@ -79,7 +81,11 @@ else
  
    echo "Starting gamemaster"
    while true; do
 -    gameMasterSecret='' QUERY_STRING='' wget -O - http://webserver/gamemaster.php?gameMasterSecret= > /dev/null 2>&1
 +    # gameMasterSecret must be in the URL: gamemaster.php reads it from the query string
-+    # ($_REQUEST), not from the environment, so passing it as a shell var here is a no-op
-+    # and every request was silently failing the permission check ("Denied").
++    # ($_REQUEST), not from the environment. Upstream sends an empty secret, which only
++    # matches the sample config; install.sh sets a non-empty one in config.php, so it has
++    # to be sent here or every request is denied.
 +    wget -O - "http://webserver/gamemaster.php?gameMasterSecret=local-gamemaster-dev-secret" > /dev/null 2>&1
      sleep 3
      echo -n "."
