@@ -79,10 +79,10 @@ fi
 # Ignoré par l'amont, donc absent d'un clone neuf ; PHP (www-data) ne peut pas le créer
 # dans un arbre qui appartient à l'utilisateur, et la création de partie échoue sans lui.
 mkdir -p "$W/cache" && chmod a+rwx "$W/cache"
-if [ ! -d "$W/vendor" ]; then
+if [ ! -f "$W/vendor/autoload.php" ]; then   # écrit en dernier : un dossier seul peut être partiel
   docker run --rm -u "$(id -u):$(id -g)" -v "$W:/app" -w /app composer:2 install --no-interaction --ignore-platform-reqs
 fi
-if [ ! -d "$W/sse-server/node_modules" ]; then
+if [ ! -f "$W/sse-server/node_modules/.package-lock.json" ]; then   # écrit en dernier par npm
   # Sans le serveur SSE, nginx ne résout pas l'hôte « sse » et le site ne démarre pas.
   # Versions figées par le package-lock.json de webdiplomacy/overlay.
   docker run --rm -u "$(id -u):$(id -g)" -e npm_config_cache=/tmp/.npm -v "$W/sse-server:/app" -w /app \

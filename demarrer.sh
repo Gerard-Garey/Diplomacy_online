@@ -6,7 +6,7 @@ W="$RACINE/amont/webdiplomacy"; C="$RACINE/amont/cicero"
 [ -d "$W" ] && [ -d "$C" ] || { echo "Lancer d'abord ./install.sh" >&2; exit 1; }
 
 # Le journal d'initialisation d'un démarrage précédent ferait croire que le site est prêt.
-docker ps --format '{{.Names}}' | grep -q '^webdiplomacy-php-fpm' || rm -f "$W/gamemaster-entrypoint.txt"
+[ -n "$(docker ps -q --filter name=webdiplomacy-php-fpm)" ] || rm -f "$W/gamemaster-entrypoint.txt"
 
 # -p webdiplomacy : fixe le nom du réseau (webdiplomacy_default) que rejoint Cicero.
 docker compose -p webdiplomacy --project-directory "$W" -f "$W/docker-compose.yml" --profile core --profile dev up -d
