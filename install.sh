@@ -68,8 +68,12 @@ if [ ! -f "$W/config.php" ]; then
   # install/gamemaster-entrypoint.sh patché. Les ports ne sont publiés que sur 127.0.0.1.
   sed -e "s|\$gameMasterSecret='';|\$gameMasterSecret='local-gamemaster-dev-secret';|" \
       -e "s|\$botsLogFile=false;|\$botsLogFile='/tmp/webdip-bots.log';|" \
+      -e 's|"variantIDs" => array(1, 15, 23)|"variantIDs" => array(1)|' \
       "$W/config.sample.php" > "$W/config.php"
   grep -q "local-gamemaster-dev-secret" "$W/config.php" || echec "config.sample.php a changé : secret gamemaster non posé"
+  # Seule la variante Classic est installée (wD_VariantInfo, comptes de bots, moteur) :
+  # les deux variantes à deux joueurs de l'amont échoueraient à la création.
+  grep -q '"variantIDs" => array(1)' "$W/config.php" || echec "config.sample.php a changé : liste des variantes non restreinte"
   echo "config.php créé"
 fi
 # Ignoré par l'amont, donc absent d'un clone neuf ; PHP (www-data) ne peut pas le créer
