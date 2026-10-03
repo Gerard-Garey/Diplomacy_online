@@ -20,6 +20,8 @@ Vocabulaire à employer tel quel dans le code, la documentation, les issues et l
 - **Trahison** : abandon délibéré d'un engagement sincère au profit d'un autre de valeur nettement supérieure (ligne de journal `[betrayal]`). **Double jeu** : promesses contraires faites à deux puissances sur une même unité (`[double-deal]`).
 - **Registre de confiance** : bilan, tenu par chaque bot, des promesses tenues et rompues par chaque interlocuteur.
 - **Ancrage** : le fait que le dialogue soit écrit à partir du plan du moteur. *Ne pas dire* : grounding.
+- **Partie ordinaire** : un humain contre six bots (exigence 1.1). **Partie 100 % bots** : partie d'essai dont les sept puissances sont tenues par des bots, lançable seulement par un administrateur ou directement par Claude ; elle fournit, sans action humaine, les positions à rejouer. *Ne pas dire* : partie automatique, self-play (qui désigne l'entraînement de Cicero).
+- **Position rejouée** : l'état d'une partie ramené au début d'une phase donnée (`rolled_back_to_phase_start`), sur lequel on relance le calcul du moteur ou le bot de dialogue ; support des tableaux avant / après. Le tirage n'ayant pas de graine, une même position rejouée ne redonne pas forcément les mêmes ordres.
 - **Clef en main** : un `git clone` suivi de `./install.sh` et `./demarrer.sh` suffit, sans rien reprendre d'une autre machine.
 
 ## Organisation du travail
