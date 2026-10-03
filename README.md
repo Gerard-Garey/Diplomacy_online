@@ -12,7 +12,7 @@ Ce dépôt ne contient **que ce que le projet ajoute** aux deux logiciels d'amon
 | `install.sh` jusqu'à la préparation des amonts (clonage, patchs, configuration, dépendances PHP) | Vérifié par un essai à blanc |
 | Construction de l'image Cicero par le `Dockerfile` de ce dépôt | Validée le 2026-10-03 sur la machine d'origine : build complet depuis les sources en 20 min environ, image de 16,7 Go ; PyTorch y voit le GPU, `pydipcc`, `postman` et les protos s'importent |
 | Démarrage de la pile depuis ce dépôt, sur une base vide | Validé le 2026-10-03 : inscription d'un joueur, partie créée contre six bots, ordres soumis par les six, réponse de Claude à un message, données conservées après `arreter.sh` puis `demarrer.sh` |
-| Interface « beta » (React, carte cliquable) de webDiplomacy | Construite par `install.sh` depuis le 2026-10-03 (1 min 30) : la page et son script sont servis, l'API de partie répond. **Non vérifiée dans un navigateur** |
+| Interface « beta » (React, carte cliquable) de webDiplomacy | Construite par `install.sh` depuis le 2026-10-03 (1 min 30) : le mainteneur y a saisi ses ordres et envoyé un message dans la partie d'essai, phase résolue |
 | Serveur d'événements (`webdiplomacy-sse`) | Démarre, mais ne joint pas Redis faute de configuration ; sans effet constaté sur l'interface classique |
 
 ## Prérequis
