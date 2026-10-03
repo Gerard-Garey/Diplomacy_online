@@ -88,7 +88,7 @@ if [ "$MODELES_DL" = 1 ]; then
 fi
 
 if [ "$BUILD" = 1 ]; then
-  etape "Image Docker Cicero (compilation C++ en -j1 : compter 1 à 2 h)"
+  etape "Image Docker Cicero (compilation C++ en -j1 : compter 20 à 30 min)"
   docker build -t cicero-webdip:latest "$C"
 fi
 
