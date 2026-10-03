@@ -71,8 +71,17 @@ if [ ! -f "$W/config.php" ]; then
   grep -q "local-gamemaster-dev-secret" "$W/config.php" || echec "config.sample.php a changé : secret gamemaster non posé"
   echo "config.php créé"
 fi
+# Ignoré par l'amont, donc absent d'un clone neuf ; PHP (www-data) ne peut pas le créer
+# dans un arbre qui appartient à l'utilisateur, et la création de partie échoue sans lui.
+mkdir -p "$W/cache" && chmod a+rwx "$W/cache"
 if [ ! -d "$W/vendor" ]; then
   docker run --rm -u "$(id -u):$(id -g)" -v "$W:/app" -w /app composer:2 install --no-interaction --ignore-platform-reqs
+fi
+if [ ! -d "$W/sse-server/node_modules" ]; then
+  # Sans le serveur SSE, nginx ne résout pas l'hôte « sse » et le site ne démarre pas.
+  # Versions figées par le package-lock.json de webdiplomacy/overlay.
+  docker run --rm -u "$(id -u):$(id -g)" -e npm_config_cache=/tmp/.npm -v "$W/sse-server:/app" -w /app \
+    node:16.15.1-alpine3.14 npm ci --no-audit --no-fund
 fi
 
 if [ "$MODELES_DL" = 1 ]; then
