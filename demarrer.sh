@@ -24,8 +24,17 @@ done
 wget -q -O /dev/null http://localhost:43000/ || { echo "Le site ne répond pas sur http://localhost:43000 : voir « docker logs webdiplomacy-webserver-1 »" >&2; exit 1; }
 
 # Après plus de 12 min d'arrêt, webDiplomacy suspend le traitement des parties jusqu'à
-# une remise à zéro par un administrateur : c'est le cas à chaque redémarrage de la pile.
-docker exec webdiplomacy-db sh -c 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" webdiplomacy -e "UPDATE wD_Misc SET value=UNIX_TIMESTAMP() WHERE name=\"LastProcessTime\""'
+# une remise à l'heure par un administrateur : c'est le cas à chaque redémarrage de la pile.
+# On rend d'abord aux parties en cours la durée de l'arrêt (action « globalAddTime » de
+# l'amont) : sinon une phase échue pendant l'arrêt serait résolue avant le retour des bots.
+docker exec -i webdiplomacy-db sh -c 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" webdiplomacy' <<'SQL'
+SET @dernier := (SELECT value FROM wD_Misc WHERE name='LastProcessTime');
+SET @arret := UNIX_TIMESTAMP() - @dernier;
+UPDATE wD_Games SET processTime = processTime + @arret
+  WHERE @dernier > 0 AND @arret > 720
+    AND processStatus = 'Not-processing' AND phase <> 'Finished' AND processTime IS NOT NULL;
+UPDATE wD_Misc SET value = UNIX_TIMESTAMP() WHERE name = 'LastProcessTime';
+SQL
 
 # Redis n'est pas persistant : Cicero refuse de démarrer sans cette clé (base n°1).
 docker exec webdiplomacy-redis redis-cli -n 1 set message_review_version 1 >/dev/null

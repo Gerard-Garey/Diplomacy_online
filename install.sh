@@ -33,14 +33,15 @@ grep -q '^CLAUDE_CODE_OAUTH_TOKEN=.\+' .env || echo "ATTENTION : CLAUDE_CODE_OAU
 
 cloner() { # nom dépôt commit [recursif]
   local dir="$AMONT/$1"
-  if [ ! -d "$dir/.git" ]; then
-    git clone "$2" "$dir"
-    git -C "$dir" checkout --quiet "$3"
-    [ "${4:-}" = recursif ] && git -C "$dir" submodule update --init --recursive
-  fi
+  [ -d "$dir/.git" ] || git clone "$2" "$dir"
+  # Hors du test ci-dessus : un clonage interrompu se reprend à la relance.
+  [ "$(git -C "$dir" rev-parse HEAD)" = "$3" ] || git -C "$dir" checkout --quiet "$3"
+  if [ "${4:-}" = recursif ]; then git -C "$dir" submodule update --init --recursive; fi
   [ "$(git -C "$dir" rev-parse HEAD)" = "$3" ] || echec "$dir n'est pas au commit épinglé $3"
 }
 appliquer() { # dossier-git patch
+  # Dans un sous-module resté vide, git applique « avec succès » un patch dont il ignore tous les chemins.
+  [ "$(git -C "$1" rev-parse --show-toplevel 2>/dev/null)" = "$(cd "$1" && pwd -P)" ] || echec "$1 n'est pas la racine d'un dépôt git (clonage incomplet ?)"
   if git -C "$1" apply --reverse --check "$2" 2>/dev/null; then echo "déjà appliqué : $(basename "$2")"
   else git -C "$1" apply --check "$2" || echec "le patch $(basename "$2") ne s'applique pas sur $1"
        git -C "$1" apply "$2"; echo "appliqué : $(basename "$2")"; fi
@@ -55,7 +56,7 @@ appliquer "$P/pybind11" "$RACINE/cicero/patches/0002-pybind11-cxx17.patch"
 appliquer "$P/grpc/third_party/googletest" "$RACINE/cicero/patches/0003-googletest-gcc11.patch"
 cp -a "$RACINE/cicero/overlay/." "$C/"
 chmod +x "$C/docker-entrypoint.sh" "$C/check_orders.sh"
-mkdir -p "$C/webdip_logs_test"
+mkdir -p "$C/webdip_logs_test" "$C/journaux_moteur"
 
 etape "Amont webDiplomacy ($WEBDIP_COMMIT)"
 cloner webdiplomacy "$WEBDIP_DEPOT" "$WEBDIP_COMMIT"
@@ -64,7 +65,7 @@ appliquer "$W" "$RACINE/webdiplomacy/patches/0001-webdiplomacy.patch"
 cp -a "$RACINE/webdiplomacy/overlay/." "$W/"
 if [ ! -f "$W/config.php" ]; then
   # Secret du gamemaster : valeur de développement local, la même que dans
-  # install/gamemaster-entrypoint.sh patché. Le site n'est exposé que sur localhost.
+  # install/gamemaster-entrypoint.sh patché. Les ports ne sont publiés que sur 127.0.0.1.
   sed -e "s|\$gameMasterSecret='';|\$gameMasterSecret='local-gamemaster-dev-secret';|" \
       -e "s|\$botsLogFile=false;|\$botsLogFile='/tmp/webdip-bots.log';|" \
       "$W/config.sample.php" > "$W/config.php"
@@ -102,7 +103,10 @@ if [ "$MODELES_DL" = 1 ]; then
   for f in $MODELES; do
     [ -s "$C/models/$f" ] && { echo "présent : $f"; continue; }
     wget -c "https://dl.fbaipublicfiles.com/diplomacy_cicero/models/$f.gpg" -O "$C/models_encrypted/$f.gpg"
-    gpg --batch --yes --passphrase "$MDP" --output "$C/models/$f" -d "$C/models_encrypted/$f.gpg"
+    # Vers un nom provisoire : un déchiffrement interrompu laisse un fichier partiel,
+    # que la relance prendrait pour un modèle présent.
+    gpg --batch --yes --passphrase "$MDP" --output "$C/models/$f.partiel" -d "$C/models_encrypted/$f.gpg"
+    mv "$C/models/$f.partiel" "$C/models/$f"
     rm -f "$C/models_encrypted/$f.gpg"
   done
 fi
