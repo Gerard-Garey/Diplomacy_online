@@ -6,7 +6,7 @@
 # pas au countryID demande).
 # Usage: ./check_orders.sh <gameID>
 
-set -e
+set -eo pipefail
 
 GAME_ID="$1"
 if [ -z "$GAME_ID" ]; then

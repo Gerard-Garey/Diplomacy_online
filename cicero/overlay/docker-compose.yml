@@ -10,6 +10,9 @@ services:
     volumes:
       - ./models:/opt/cicero/models:ro
       - ./webdip_logs_test:/opt/cicero/webdip_logs_test
+      # Journaux du moteur (valeur et probabilité de chaque action) : sans ce montage
+      # ils vivent dans le conteneur et disparaissent à chaque arrêt de la pile.
+      - ./journaux_moteur:/root/diplomacy_experiments
     networks:
       - webdiplomacy_default
     deploy:

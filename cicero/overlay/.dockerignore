@@ -5,3 +5,4 @@ models_encrypted/
 webdip_logs_test/
 webdip_logs_full_test/
 .env
+journaux_moteur/
