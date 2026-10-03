@@ -31,7 +31,7 @@ for v in CICERO_COMMIT WEBDIP_COMMIT; do
 done
 [ -n "${MODELES:-}" ] || ko "MODELES vide dans versions.env"
 
-if grep -rnE '/home/[a-z]+/' --exclude-dir=.git --exclude-dir=amont --exclude-dir=docs --exclude=verifier.sh . ; then
+if grep -rnE '/home/[A-Za-z0-9._-]+/' --exclude-dir=.git --exclude-dir=amont --exclude-dir=docs --exclude=verifier.sh . ; then
   ko "chemin personnel codé en dur (voir ci-dessus)"
 fi
 # .env est ignoré par git et contient le jeton par construction ; -l : ne jamais afficher un jeton.
