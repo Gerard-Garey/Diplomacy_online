@@ -4,7 +4,9 @@ Tenue par `architect`, après chaque série de PR fusionnées. Chaque mise à jo
 
 ## 1. Branche de travail en cours
 
-Mise à jour du 2026-10-03 (troisième, après la révision de l'ADR 0004) — `main` : `a9566a2` (fusion de la PR #1) ; `claude/promesses` : `0fdb5bf`, PR brouillon #16. Mises à jour précédentes du même jour : `2d5294f`, puis `41e009f` (sur `7372dcf`).
+Mise à jour du 2026-10-03 (quatrième, après la validation de fond d'`expert-cicero` et les décisions M32 à M41) — `main` : `a9566a2` (fusion de la PR #1) ; `claude/promesses` : `7b7ce70`, PR brouillon #16. Mises à jour précédentes du même jour : `2d5294f`, `41e009f` (sur `7372dcf`), puis `1256927` (sur `0fdb5bf`).
+
+**État au 2026-10-03.** Le code de fond est écrit et audité pour #2, #17 / #3, #4 et #5 ; il est dans l'arbre de travail, **non commité** (visa à venir, M40) et sauvegardé dans `amont/sauvegardes/` (hors dépôt). Corrections finales en cours chez `coder` (M32 à M35). Les mesures sur la pile sont autorisées par le mainteneur (M38) ; protocole au § 1.3.
 
 - **Branche** : `claude/promesses` — PR #16, brouillon.
 - **Objet** : logique des promesses. Périmètre fixé par le mainteneur le 2026-10-03 (M10, M11), étendu le même jour sur son accord : trahison retirée chez tous les destinataires (avec #2, M19), réponse vide et sourdine (avec #5, M17), issue #17 (M24), qui remplace la tâche T5 telle que spécifiée et implémente #3 ; #3 reste dans le périmètre et est fermée par le même travail.
@@ -12,11 +14,11 @@ Mise à jour du 2026-10-03 (troisième, après la révision de l'ADR 0004) — `
   - [x] T1 — option « partie 100 % bots » — #12 : script en ligne de commande (`e0624e6`) ; partie `gameID=3` créée le 2026-10-03, elle avance seule ; critères d'exécution A1 à A5 en cours de levée (dans l'issue)
   - [x] T2 — banc déterministe (`7372dcf` : `tests/banc_promesses.py`, `tests/test_promesses.py`, `tests/mesure_promesses.py`, cibles en échecs attendus) ; la mesure « avant » répétée (appels réels à Claude) reste à faire avant les commits de fond
   - [x] T3 — #5, volet technique (écriture atomique, garde de `load_state`, bot muet sur fichier illisible) — `e351abf` ; résultats : aucun ; réserves mineures d'`audit` reprises avec T7
-  - [ ] T4 — #2 — fait et audité, dans l'arbre de travail, non commité (attend le visa) — résultat changé (`sincere`)
-  - [ ] T5 — #17, qui spécifie et implémente #3 (trahison déclarée, mémoire des promesses du bot, index `order_values`) — ADR 0004 révisé — partie déterministe et consigne faites et auditées, non commitées ; **à reprendre après T6** pour la grandeur comparée (M25), la condition (e) (M26), la marge 0,05 (M27), la table (M28), la révision séquentielle (M29) et le bornage « free » (M30) — résultat changé (`sincere`, `[betrayal]`, consigne, `current_plans.json`)
-  - [ ] T6 — #4 — **en cours** ; renfort gradué en fonction pure, commune au moteur et au bot de dialogue (`pseudo_commitments.py`), dont dépend la condition (e) — résultat changé (probabilité des actions, donc ordres tirés)
-  - [ ] T7 — #5, volet de fond (journal d'envoi, trois essais, réponse vide, sourdine) — après la reprise de T5 — résultat changé (`sincere`)
-  - [ ] T8 — mesure « après », tableau avant / après unique, visa du mainteneur
+  - [ ] T4 — #2 — écrit et audité, dans l'arbre de travail, non commité (attend le visa) — résultat changé (`sincere`)
+  - [ ] T5 — #17, qui spécifie et implémente #3 (trahison déclarée, mémoire des promesses du bot, index `order_values`) — ADR 0004 révisé puis complété — écrit et audité, reprise après T6 comprise (M25 à M30), non commité (attend le visa) ; **corrections finales en cours** : rejugement jusqu'à stabilité (M32), politique d'avant renfort remise dans le résultat de recherche (M33, patch du moteur, à contrôler sur une recherche réelle), balises après confirmation de l'envoi (M34), texte de la consigne (M35), `search.boost` à 1,0 quand les engagements sont désactivés — résultat changé (`sincere`, `[betrayal]`, consigne, `current_plans.json`)
+  - [ ] T6 — #4 — écrit et audité, non commité (attend le visa) ; renfort gradué en fonction pure, commune au moteur et au bot de dialogue (`pseudo_commitments.py`), dont dépend la condition (e) — résultat changé (probabilité des actions, donc ordres tirés)
+  - [ ] T7 — #5, volet de fond (journal d'envoi `pending_send`, trois envois au plus, réponse vide, sourdine ; M17, M36) — écrit et audité, non commité (attend le visa) — résultat changé (`sincere`, moment où un engagement atteint le moteur)
+  - [ ] T8 — mesures (protocole du § 1.3, autorisé par M38), tableau avant / après unique, visa du mainteneur
   - [ ] T9 — documentation de fond, un passage (règle 9), textes listés par l'ADR 0004 compris
 
 ### 1.1 Ordre des commits
@@ -33,6 +35,7 @@ Ce qui dépend de la spécification des experts est marqué **(experts)** : le p
 | 5 | `cicero:` écriture atomique de `save_state` et `save_commitments_file`, garde de `load_state` sur un JSON tronqué (#5) | T3 | `coder` → `audit` | 3 | non |
 | — | mesure « avant » sur le code de rang 5 (aucun commit) | T2 | session principale, protocole d'`expert-cicero` | — | — |
 | 5 bis | `docs:` ADR 0004 (trahison déclarée), annotation de l'ADR 0003, glossaire, feuille de route — le document précède le code (règle 9, exception) | T5 | `architect-approfondi`, routage Fable (§ 4.1.3) | 4 | non |
+| 6 à 9 | **Découpage révisé (M40)** : les rangs 6 à 9 ci-dessous décrivent l'ordre des travaux ; les commits sont au nombre de trois — `cicero:` #4 ; `cicero:` commun à #2, #17 / #3 et #5 ; `tests:` — voir § 1.3 | T4 à T7 | session principale | — | oui |
 | 6 | `cicero:` deux ordres contraires d'un même message, trahison retirée chez tous les destinataires (#2) | T4 | voir § 1.2 | 2 | oui |
 | 7 | `cicero:` cible et gradation du renfort de probabilité, fonction pure partagée (#4) | T6 | voir § 1.2 | 2 | oui |
 | 8 | `cicero:` trahison déclarée, condition (e), marge 0,05, mémoire des promesses du bot, `order_values`, `candidates` et `search` (#17, ferme #3) | T5 | voir § 1.2 | 1 | oui |
@@ -47,7 +50,7 @@ Raisons de l'ordre (révisé le 2026-10-03 d'après `expert-cicero`, après la s
 - **#2 avant #17** : même fonction (`_reject_contradictions`, `claude_dialogue_bot.py:163`) ; la règle de #2 (plus d'un ordre entrant pour l'unité : aucun retenu) est la ligne 1 de la table de décision de #17, appliquée avant le label ; #2 corrige aussi la clé `by_recipient[None]`.
 - **#17 avec #3** : #17 reprend la décision de #3 (valeur inconnue → la première promesse tient, index `order_values` exporté par `plan_export.py`) et y ajoute la condition du label ; un seul commit, qui ferme les deux issues.
 - **#4 avant la reprise de #17** (M31, révision du 2026-10-03 ; remplace « #5 de fond avant #4 ») : la condition (e) de l'ADR 0004 appelle la fonction de renfort de #4 (`apply_commitments_to_policy`, `pseudo_commitments.py:171`, à rendre pure et partagée) ; l'écrire deux fois ferait diverger (e) du moteur. Ordre réel des travaux : #2 (fait, audité) ; #17 et #3, partie déterministe et consigne (faites, auditées) ; #4 (en cours) ; reprise de #17 ; #5 de fond ; mesures et visa. Le diff de #17 se construit en deux temps mais reste un seul commit.
-- **#5 de fond en dernier** : #5 déplace le point de persistance des engagements (après envoi confirmé), que #17 utilise pour `own_promises` ; il reste côté bot de dialogue et ne dépend ni de #4 ni de (e). Dépendance retirée : « #4 en dernier pour ne rejouer le moteur qu'une fois » ; les rejeux moteur se font après le rang 8, quand l'export (`candidates`, `search`) est définitif.
+- **#5 de fond en dernier** : #5 change le point de persistance des engagements, que #17 utilise pour `own_promises` (tel qu'implémenté : état et fichier d'engagements écrits **avant** l'envoi sous le journal `pending_send`, défaits si le message n'est pas parti ; et non « après envoi confirmé », formulation antérieure de cette ligne et de l'issue #17) ; il reste côté bot de dialogue et ne dépend ni de #4 ni de (e). Dépendance retirée : « #4 en dernier pour ne rejouer le moteur qu'une fois » ; les rejeux moteur se font après le rang 8, quand l'export (`candidates`, `search`) est définitif.
 
 ### 1.2 Circuit de chaque issue
 
@@ -57,18 +60,29 @@ Raisons de l'ordre (révisé le 2026-10-03 d'après `expert-cicero`, après la s
 - **#5, volet technique — circuit 3.**
 - **T1 — circuit 1**, spécifié par les deux experts.
 
-Mesure (protocole d'`expert-cicero`, volume approuvé par le mainteneur) : partie déterministe par le banc (appel direct et cycle simulé, `tests/mesure_promesses.py`) ; partie répétée par appels réels à Claude, cinq situations fabriquées à partir d'une position de la partie `gameID=3`, vingt tirages chacune, avant et après : 160 appels. Vingt tirages ne distinguent que de gros écarts (exigence 2.10) ; le tableau le dit.
+Mesure (protocole d'`expert-cicero`, volume approuvé par le mainteneur) : partie déterministe par le banc (appel direct et cycle simulé, `tests/mesure_promesses.py`) ; partie répétée par appels réels à Claude, cinq situations fabriquées à partir d'une position de la partie `gameID=3`, vingt tirages chacune : trois situations avant et après (120 appels), deux situations propres au nouveau code, après seulement (40 appels), soit 160 appels ; protocole complet au § 1.3. Vingt tirages ne distinguent que de gros écarts (exigence 2.10) ; le tableau le dit.
 
 ### 1.3 Tableau avant / après et visa (M10)
 
-Un seul tableau et un seul visa pour #2 à #5, par décision du mainteneur ; les commits restent distincts, un par issue.
+Un seul tableau et un seul visa pour #2 à #5, par décision du mainteneur.
+
+**Découpage des commits (M40, 2026-10-03 ; remplace « les commits restent distincts, un par issue »).** Les diffs par issue, conservés hors du dépôt dans un dossier temporaire, ont été perdus au redémarrage de la machine (dossier effacé). Le mainteneur a décidé de trois commits : un commit `cicero:` pour #4 ; un commit `cicero:` commun à #2, #17 / #3 et #5 ; un commit `tests:`. C'est une **dérogation** à la règle « un commit par issue qui change un résultat » (`CLAUDE.md`, « Git et GitHub »), à noter dans la PR #16 ; le tableau avant / après garde une section par issue, et le message du commit commun renvoie aux quatre issues. Le code reste hors git jusqu'au visa, sauvegardé dans `amont/sauvegardes/` (ignoré par git).
+
+**Protocole de mesure retenu** (autorisé par le mainteneur, M38) :
+
+1. l'image actuelle est conservée sous l'étiquette `cicero-webdip:avant` ; l'image est reconstruite sur le nouveau code ;
+2. **30 recherches réelles** du moteur sur le nouveau code, avec quatre contrôles : la table exportée est présente (`candidates`, `search`) ; les actions candidates sont toutes dans la copie de la politique avant renfort ; la tête recalculée par le bot de dialogue est l'action jouée ; le renfort n'est pas composé d'une recherche à l'autre (M33) ;
+3. **mesure appariée de #4**, hors ligne (M37) : l'ancien et le nouveau renfort appliqués à la même table réelle, la comparaison étant approchée au second ordre ;
+4. **160 appels à Claude** : trois situations avant et après (120), deux situations propres au nouveau code, après seulement (40) ;
+5. **essai d'envoi réel** sur une partie jetable (journal d'envoi de #5).
 
 - Le tableau a une section par issue. Chaque ligne est expliquée par une seule des quatre modifications ; une ligne inexpliquée est une régression.
 - **Lignes déterministes** (mesurées une fois) : appel direct de la fonction corrigée, avec les entrées citées dans l'issue.
 - **Lignes sur position rejouée** (répétées) : mêmes positions, mêmes messages reçus, plusieurs tirages **(experts : nombre de positions, de tirages, grandeurs relevées)**.
 - Chaque mesure note la version de la CLI Claude Code et le modèle servi : ni l'une ni l'autre n'est épinglée (#6, #7), et l'image est reconstruite entre « avant » et « après ». Si l'une a changé, la mesure « avant » est refaite sur la nouvelle image.
-- Les rangs 6 à 9 restent dans l'arbre de travail jusqu'au visa (`CLAUDE.md` : sans visa, rien n'est commité). La session principale conserve hors du dépôt le diff de chaque issue, pour faire quatre commits distincts. Ce travail se fait donc sur le poste local, pas en session cloud.
-- Toute reconstruction ou redémarrage de la pile est annoncé au mainteneur avant d'être lancé (M12).
+- Les rangs 6 à 9 restent dans l'arbre de travail jusqu'au visa (`CLAUDE.md` : sans visa, rien n'est commité), sauvegardés dans `amont/sauvegardes/` ; découpage des commits : M40, ci-dessus. Ce travail se fait donc sur le poste local, pas en session cloud.
+- Les décomptes de `[betrayal]` et `[revision]` ne portent pas sur la même définition avant et après (M34 : après confirmation de l'envoi seulement) ; le tableau le dit.
+- Toute reconstruction ou redémarrage de la pile est annoncé au mainteneur avant d'être lancé (M12) ; la reconstruction du protocole est autorisée (M38) ; la pile a été relancée par `demarrer.sh` après le redémarrage de la machine (M39).
 
 ### 1.4 Critères d'acceptation
 
@@ -80,7 +94,7 @@ Un seul tableau et un seul visa pour #2 à #5, par décision du mainteneur ; les
 | T4 (#2) | Deux ordres contraires pour une même unité dans une même liste `sincere` : un seul au plus est retenu, selon la règle établie par `expert-cicero` ; plus de clé `by_recipient[None]` ni de `"null"` sérialisé. |
 | T5 (#17, #3) | Critères (a) à (g) de l'issue #17 : chaque ligne de la table de décision (0 à 8, 6 bis comprise) est un test du banc qui passe, état inchangé dans les cas refusés ; `betray` toujours une liste ; 0 label sur 20 sans conflit, au moins 18 labels exacts sur 20 en conflit ; aucun `reply` ne contient `sincere`, `betray`, une accolade ni la promesse faite à un tiers ; taille de consigne mesurée ; au plus un ordre par unité dans `pseudo_commitments.json`. Pour #3 : valeur inconnue → la première promesse tient ; texte du § 4 de l'architecture, docstring et code concordent ; la mention « écart connu » du § 4 est retirée. Révision (M25 à M30) : `order_values` vaut la valeur de l'action de meilleur score contenant l'ordre ; (e) calculée par la fonction de renfort de #4, la même que celle du moteur (un test compare les deux sur une même table) ; `candidates` ou `search` absents → `unknown_value` ; marge 0,05 ; au plus un ordre par unité et par destinataire dans `own_promises.pending` ; aucun coût négatif affiché à Claude, `cost_vs_best` exporté inchangé. |
 | T6 (#4) | Sur l'exemple de l'issue (promesses `A MAR - SPA` et `F BRE - ENG`, politique 0,5 / 0,3 / 0,2), les probabilités obtenues sont celles de la règle établie ; la somme vaut 1 ; aucune valeur d'action n'est modifiée (invariant « le moteur décide ») ; le renfort est une fonction pure, appelée par le moteur et par le bot de dialogue. |
-| T7 (#5) | Un envoi en échec (erreur réseau, statut 4xx ou 5xx simulés) ne laisse aucun engagement enregistré et ne marque pas le message comme répondu ; un message n'est jamais envoyé deux fois (exigence 5.3). |
+| T7 (#5) | Critère d'origine : un envoi en échec (erreur réseau, statut 4xx ou 5xx simulés) ne laisse aucun engagement enregistré et ne marque pas le message comme répondu ; un message n'est jamais envoyé deux fois (exigence 5.3). **Tel qu'implémenté (M17, M36), à confirmer par le mainteneur au visa** : un envoi incertain garde l'engagement (état et fichier) sous `pending_send` jusqu'à sa résolution par relecture des messages de la partie ; sourdine ou abandon (trois envois, ou changement de phase) : engagements défaits, message marqué répondu, échange non compté ; le même texte n'est renvoyé qu'après deux relectures négatives ; une promesse dont le message n'est pas parti n'est ni jugée ni rappelée. Écarts au critère d'origine : l'engagement existe pendant l'incertitude ; le message est marqué répondu à l'abandon ; un renvoi après deux relectures négatives peut doubler un message stocké avec retard (risque résiduel envers l'exigence 5.3, que l'essai d'envoi réel du § 1.3 observe). |
 | T8 | Tableau complet, chaque ligne expliquée, visé par le mainteneur. |
 | T9 | `docs/doc/architecture.md` § 3 et § 4 et `README.md` concordent avec le code final ; diff validé par `expert`. |
 
@@ -107,7 +121,7 @@ Dans cet ordre, sauf décision contraire du mainteneur.
 |---|---|---|---|
 | non-régression | #9, #14, #15, plus une issue à créer (référence de non-régression) | Même dossier (`cicero/overlay/essais/`) et même besoin : des essais qui ne supposent ni la partie 15 ni une action humaine, et qui n'écrivent pas dans les fichiers de production. #14 (garde de l'exigence 2.8) est le prérequis des messages scénarisés par l'API, donc d'un essai de la chaîne entière sans humain ; #15 (quatre points non vérifiés de l'import) sont des mesures à exécuter, dont deux (arrêt long, reprise après échec d'appel) demandent la pile et la partie 100 % bots | `claude/promesses` : positions rejouées et partie 100 % bots (T1, T2) ; signature de `_reject_contradictions` fixée par #2 et #17 |
 | installation reproductible | #6, #7, #8, #13 | #6 et #7 touchent le `Dockerfile` (une seule reconstruction de l'image) et épinglent ce dont dépend le comportement des bots (CLI, modèle) ; #7 et #8 touchent `install.sh` ; #13 (`br_regularize_lambda`, 1e-2 contre 3e-3) touche `cicero_no_dialogue.prototxt`, paramètre du moteur embarqué dans la même image : si le mainteneur revient à 3e-3, c'est un changement de résultat à mesurer contre la référence de non-régression, avec #6 et #7 | non-régression : épingler le modèle, retirer les outils ou changer λ change un résultat, à mesurer contre une référence ; #13 attend la décision du mainteneur (`needs-info`) |
-| exploitation | #10, #11 | Durcissement et tenue dans le temps de la pile : redémarrage, secret, fichiers d'état | `claude/promesses` (#5 : même code de persistance que #11, point 2) ; non-régression pour la question du redémarrage en cours de phase (#10) |
+| exploitation | #10, #11, #18, plus deux issues à créer sur accord (isolement par partie d'un fichier d'engagements mal formé ; croissance de `current_plans.json`) | Durcissement et tenue dans le temps de la pile : redémarrage, secret, fichiers d'état, réglages de sécurité du dépôt | `claude/promesses` (#5 : même code de persistance que #11, point 2) ; non-régression pour la question du redémarrage en cours de phase (#10) |
 
 Dépendances ajoutées le 2026-10-03 : non-régression → `claude/promesses` (remplace « validation du build ») ; installation reproductible → non-régression ; exploitation → `claude/promesses` et non-régression. Dépendance retirée : la ligne « validation du build », faite dans la PR #1 (§ 6). Ajouts de la seconde mise à jour : #14 et #15 → non-régression (#15, point « installation sur une autre machine », peut être levé plus tôt par toute session cloud, sans attendre la branche) ; #13 → installation reproductible, après décision du mainteneur ; #10, point « aucun compte administrateur » : T1 n'a pas créé de compte Admin (M20, script en ligne de commande), le point reste à #10.
 
@@ -116,14 +130,15 @@ Recoupements à connaître :
 - #9 et #2, #17 : `test_multiparty.py` dépaquette mal le retour de `_reject_contradictions` ; la signature est touchée dans `claude/promesses` (#2, puis #17 qui ajoute le label en entrée) ; #9 reprend la signature finale, celle que fixe le banc `tests/banc_promesses.py`.
 - #14 et #12 : la garde de l'exigence 2.8 n'a de sens que dans la partie 100 % bots ; la question posée à `architect` par #14 (filtre sur les comptes bots ou silence de la seule puissance scénarisée) se tranche au plan de la branche non-régression, avec les positions de `gameID=3` sous la main.
 - #11 (point 2) et #5 : un JSON illisible remet le fichier à vide ; la garde posée par T3 sur l'état du bot de dialogue est à reprendre pour `current_plans.json`.
-- #11 et #17 : `current_plans.json` reçoit `candidates` (toutes les actions candidates) et `search` (ADR 0004, décision 12) ; le fichier grossit d'autant, à prendre en compte dans la purge des fichiers d'état.
+- #11 et #17 : `current_plans.json` reçoit `candidates` (toutes les actions candidates) et `search` (ADR 0004, décision 12) ; le fichier grossit d'autant, à prendre en compte dans la purge des fichiers d'état (issue complémentaire à créer sur accord, § 3).
+- #18 et #10 : deux durcissements sans changement de résultat ; #18 est du domaine `repo:` (plus `docs:` pour le README). Le ruleset et les modes de fusion sont déjà appliqués (M41) ; la section « Sécurité du dépôt » du README, à laquelle `CLAUDE.md` renvoie déjà, peut être avancée en correctif rapide `docs:` si le mainteneur le veut, le script de contrôle restant à la branche.
 - #10 (aucun compte administrateur créé) et T1 : la partie 100 % bots est réservée à l'administrateur. Si T1 crée ce compte, ce point de #10 est réglé par `claude/promesses` et s'y note.
 - #10 (motif du correctif du gamemaster dans l'architecture § 5) : le texte actuel du § 5 donne déjà le motif rectifié (`d843896`, `83e2087`) ; à confirmer par `docwriter`, puis à rayer de l'issue.
 - #6 et #7 pendant `claude/promesses` : voir § 1.3, version de la CLI et modèle notés à chaque mesure.
 
 ## 3. Issues hors plan
 
-Aucune : les quinze issues ouvertes (#2 à #15, #17) sont rattachées et triées (libellés posés le 2026-10-03, M13).
+Aucune : les seize issues ouvertes (#2 à #15, #17, #18) sont rattachées et triées (libellés posés le 2026-10-03, M13 ; #18 créée le même jour, `ready-for-agent`).
 
 | Issue | Libellés | Tâche | Branche |
 |---|---|---|---|
@@ -142,7 +157,11 @@ Aucune : les quinze issues ouvertes (#2 à #15, #17) sont rattachées et triées
 | #15 | `ready-for-human` | quatre mesures à exécuter par le mainteneur ou une session avec la pile ; le point « autre machine » peut être levé par une session cloud à tout moment | non-régression |
 | #10 | `ready-for-agent` | durcissements | exploitation |
 | #11 | `ready-for-agent` | arrêt court, purge des fichiers d'état | exploitation |
+| #18 | `ready-for-agent` | réglages de sécurité du dépôt : ruleset « Protection main » importé et modes de fusion restreints le 2026-10-03 (M41) ; reste la section « Sécurité du dépôt » du README (`docwriter`) et le script de contrôle (`coder` → `audit`, circuit 3) | exploitation |
 | à créer | — | référence de non-régression | non-régression |
+| à créer sur accord | `bug`, `needs-triage` | `cicero :` promesse rompue réaffirmée à la puissance trahie — après une trahison, la section des promesses ne montre plus rien de la puissance trahie avant la phase suivante (ADR 0004, limites connues) ; change un résultat (consigne) | à fixer : après `claude/promesses`, avec la référence de non-régression (non-régression au plus tôt) |
+| à créer sur accord | `bug`, `needs-triage` | `cicero :` isolement par partie d'un fichier d'engagements mal formé — une forme inattendue dans une seule partie rend tous les bots muets (ADR 0004, limites connues ; M18) | exploitation |
+| à créer sur accord | `enhancement`, `needs-triage` | `install :` croissance de `current_plans.json` (clés `candidates` et `search`, 35 actions au plus par puissance et par export) — complément de #11 | exploitation |
 
 Les quatre points « non vérifiés » de la passation de la PR #1 sont devenus l'issue #15.
 
@@ -181,6 +200,16 @@ Les quatre points « non vérifiés » de la passation de la PR #1 sont devenus 
 | M29 | 2026-10-03 | Révision séquentielle : trahir une promesse faite à X puis promettre sincèrement le nouvel ordre à X avant la résolution est une révision ; l'ancienne promesse sort du bilan envers X (au plus un ordre par unité et par destinataire dans `own_promises.pending`, le dernier dit sincèrement) | ADR 0004 (révisé), décision 6 ; `CONTEXT.md` |
 | M30 | 2026-10-03 | Coûts affichés à Claude : nul ou négatif (≤ 0,0005) → « free », dans la section des promesses et dans la liste des plans (ajout de périmètre) ; `cost_vs_best` exporté inchangé | ADR 0004 (révisé), décision 14 |
 | M31 | 2026-10-03 | Ordre des travaux : #4 (renfort gradué, fonction pure partagée) avant la reprise de #17, dont la condition (e) dépend ; un seul visa pour l'ensemble (M10) | § 1 et § 1.1 ; ADR 0004 (révisé), Conséquences |
+| M32 | 2026-10-03 | Plusieurs trahisons dans un même message : rejugées jusqu'à stabilité (un N refusé `not_played` est retiré des engagements projetés, son E remis, les autres rejugés), au lieu d'une passe conjointe unique. Mesure d'`audit` : 0 violation sur 29 778 remplacements acceptés (60 000 tables engendrées) ; avant : 29 sur 29 969. Limite assumée : refus par excès (42 des 16 533 refus `not_played` auraient été acceptés seuls). Amende M26 | ADR 0004 (complété), décision 12 |
+| M33 | 2026-10-03 | Recherche incrémentale : le renfort se composait quand le moteur repartait de la politique déjà renforcée (lecture d'`expert-cicero`, non mesurée ; impossible à sept bots, possible avec un humain). Corrigé dans le patch du moteur : la politique d'avant renfort est remise dans le résultat de recherche. À contrôler sur une recherche réelle | ADR 0004 (complété), décision 12 ; § 1.3 |
+| M34 | 2026-10-03 | Journal : les balises `[betrayal]` et `[revision]` ne sont écrites qu'après confirmation de l'envoi du message (avant, une trahison annulée par une sourdine ou un abandon était comptée) | ADR 0004 (complété), décision 15 |
+| M35 | 2026-10-03 | Consigne, texte adopté pour la condition : « Your engine honours the switch only if what it would play when held to the replacing order is worth clearly more (by more than {margin}) than what it would play when held to the promise, and only if it would then actually play the replacing order. » | ADR 0004 (complété), décision 16 |
+| M36 | 2026-10-03 | Journal d'envoi (#5), précisions de M17 : deux relectures négatives avant de renvoyer le même texte (décision de prudence de la session principale, signalée au mainteneur) ; un `pending_send` mal formé → le message auquel il répondait est marqué répondu, rien d'autre n'est défait | § 1.4 (T7) ; ADR 0004 (complété), Conséquences ; ADR propre à prévoir |
+| M37 | 2026-10-03 | Mesure de #4 : appariée et hors ligne (ancien et nouveau renfort appliqués à la même table réelle, approchée au second ordre) | § 1.3 |
+| M38 | 2026-10-03 | Mesures autorisées sur la pile : image actuelle conservée (`cicero-webdip:avant`) puis reconstruction ; 30 recherches réelles ; 160 appels à Claude (trois situations avant et après, 120 ; deux situations propres au nouveau code, après seulement, 40 ; précise M23) ; essai d'envoi réel sur une partie jetable | § 1.3 |
+| M39 | 2026-10-03 | Pile relancée par `demarrer.sh` après le redémarrage de la machine | § 1.3 ; M12 |
+| M40 | 2026-10-03 | Découpage des commits après la perte des diffs par issue (redémarrage de la machine, dossier temporaire effacé) : un commit pour #4, un commit commun à #2, #17 / #3 et #5, un commit pour les tests ; dérogation à « un commit par issue qui change un résultat ». Le code reste hors git jusqu'au visa, sauvegardé dans `amont/sauvegardes/` | § 1.3 ; PR #16 (à noter) |
+| M41 | 2026-10-03 | Réglages de sécurité du dépôt : ruleset « Protection main » importé et modes de fusion restreints au commit de fusion ; issue #18 créée pour le reste (section « Sécurité du dépôt » du README, script de contrôle) | issue #18 ; § 2 et § 3 |
 
 ## 5. Escalades, relances et arrêts hors branche
 
