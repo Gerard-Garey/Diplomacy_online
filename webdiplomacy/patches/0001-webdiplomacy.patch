@@ -31,10 +31,30 @@ index cd8c8a95..69c1c356 100644
  		// Use a specific bot for a specific variant for now. A new Config:: function is needed to be able to flexibly map variants to certain specialized bots
  		$tabl = $DB->sql_tabl("SELECT id FROM wD_Users WHERE type LIKE '%bot%' ".
 diff --git a/docker-compose.yml b/docker-compose.yml
-index 40adf885..19999089 100644
+index 40adf885..1ddbdfd6 100644
 --- a/docker-compose.yml
 +++ b/docker-compose.yml
-@@ -171,7 +171,24 @@ services:
+@@ -71,6 +71,9 @@
+ #FLUSH PRIVILEGES;
+ #CREATE DATABASE webdiplomacy;
+ 
++volumes:
++  webdiplomacy-db-data:
++
+ services:
+   mariadb:
+     profiles: ["core"]
+@@ -85,6 +88,9 @@ services:
+       - MYSQL_PASSWORD=mypassword123
+     volumes:
+       - "./:/application"
++      # Volume nommé : sans lui la base vit dans un volume anonyme, perdu au
++      # premier « docker compose down ».
++      - "webdiplomacy-db-data:/var/lib/mysql"
+     ports:
+       - "43003:3306"
+ 
+@@ -171,7 +177,24 @@ services:
  # The webdiplomacy/gunboatbots:2025-06-10 image is a fork with a couple of minor bugfixes, but mainly it contains all the
  # required model data, which were previously hosted on URLs that had gone down. With access to this image only the API 
  # endpoint and API keys are needed to run the bots.
@@ -74,10 +94,19 @@ index 46b6909b..6e6941a4 100644
                  if( !is_dir(Config::$gameBackupDirectory) )
                  {
 diff --git a/install/gamemaster-entrypoint.sh b/install/gamemaster-entrypoint.sh
-index ccd17a69..bc0c0c7b 100755
+index ccd17a69..8358ba16 100755
 --- a/install/gamemaster-entrypoint.sh
 +++ b/install/gamemaster-entrypoint.sh
-@@ -79,7 +79,10 @@ else
+@@ -69,6 +69,8 @@ else
+     if [ $mysqlResult -ne 0 ]; then
+       echo "mysql on createBotAccounts.sql returned $mysqlResult , which indicates the install script failed. Check the logs, recreate the database and rerun gamemaster-entrypoint.sh from the php-fpm container"
+     fi
++    echo "Connecting to mysql to run install/variantInfoClassic.sql"
++    mysql -u webdiplomacy -h webdiplomacy-db -P 3306 --password=mypassword123 webdiplomacy < $HOME/install/variantInfoClassic.sql
+     echo "DB created"
+   fi
+ 
+@@ -79,7 +81,10 @@ else
  
    echo "Starting gamemaster"
    while true; do
