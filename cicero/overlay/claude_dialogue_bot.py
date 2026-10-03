@@ -54,6 +54,22 @@ Output ONLY a JSON object with exactly two keys, e.g.
 where "mine" = orders {power} committed to playing, and "theirs" = orders {other} committed to playing. Use [] for a side that promised nothing concrete. No other text, no markdown fences."""
 
 
+
+def _claude_result_text(stdout: str) -> str:
+    """Text of a `claude -p --output-format json` call, or raise.
+
+    A failed call (network, TLS, quota) still returns JSON with a "result"
+    field -- holding the error text -- and "is_error": true. Reading that as
+    the model's answer made the bot treat an API failure as a deliberate
+    silence and mark the incoming message as handled, so it was never
+    answered. Raising instead leaves the message pending: the polling loop
+    logs the error and retries on the next cycle.
+    """
+    parsed = json.loads(stdout)
+    if "result" not in parsed or parsed.get("is_error"):
+        raise RuntimeError(f"Claude call failed: {str(parsed.get('result', parsed))[:300]}")
+    return parsed["result"].strip()
+
 def extract_commitments(power: str, other: str, board_state_text: str, phase: str, transcript: str) -> dict:
     """Return {"mine": [orders], "theirs": [orders]} extracted from the transcript."""
     user_prompt = f"""Current phase: {phase}.
@@ -80,10 +96,7 @@ Extract the order commitments of both sides as instructed."""
         text=True,
         timeout=120,
     )
-    parsed = json.loads(result.stdout)
-    if "result" not in parsed:
-        raise RuntimeError(f"Claude call failed: {parsed}")
-    text = parsed["result"].strip()
+    text = _claude_result_text(result.stdout)
     try:
         obj = json.loads(text)
     except json.JSONDecodeError:
@@ -452,10 +465,7 @@ Decide whether to reply to {sender} as {power}, following the instructions in yo
         text=True,
         timeout=120,
     )
-    parsed = json.loads(result.stdout)
-    if "result" not in parsed:
-        raise RuntimeError(f"Claude call failed: {parsed}")
-    text = parsed["result"].strip()
+    text = _claude_result_text(result.stdout)
 
     obj = _parse_reply_json(text)
     if obj is None:
