@@ -13,7 +13,7 @@ Ce dépôt ne contient **que ce que le projet ajoute** aux deux logiciels d'amon
 | Construction de l'image Cicero par le `Dockerfile` de ce dépôt | Validée le 2026-10-03 sur la machine d'origine : build complet depuis les sources en 20 min environ, image de 16,7 Go ; PyTorch y voit le GPU, `pydipcc`, `postman` et les protos s'importent |
 | Démarrage de la pile depuis ce dépôt, sur une base vide | Validé le 2026-10-03 : inscription d'un joueur, partie créée contre six bots, ordres soumis par les six, réponse de Claude à un message, données conservées après `arreter.sh` puis `demarrer.sh` |
 | Interface « beta » (React, carte cliquable) de webDiplomacy | Construite par `install.sh` depuis le 2026-10-03 (1 min 30) : le mainteneur y a saisi ses ordres et envoyé un message dans la partie d'essai, phase résolue |
-| Serveur d'événements (`webdiplomacy-sse`) | Démarre, mais ne joint pas Redis faute de configuration ; sans effet constaté sur l'interface classique |
+| Serveur d'événements (`webdiplomacy-sse`) | Configuré depuis le 2026-10-03 : il écoute et joint Redis, `/events` répond. Le rafraîchissement automatique de l'interface cliquable n'a pas été observé à l'écran |
 
 ## Prérequis
 
@@ -37,11 +37,20 @@ Le site est alors sur <http://localhost:43000>. La base de données est créée 
 
 ### Première partie
 
-1. Créer son compte par `register.php`. Le courriel de validation arrive dans MailHog, sur <http://localhost:43001> : suivre son lien.
+1. Créer son compte par `register.php`. Une épreuve anti-robot demande de cliquer sur la carte les centres de ravitaillement d'un pays. Le courriel de validation arrive ensuite dans MailHog, sur <http://localhost:43001> : suivre son lien.
 2. Compléter le formulaire du compte. L'interface par défaut est la carte cliquable ; l'interface à menus déroulants reste disponible (« Dropdown menus », ou `board.php?gameID=<n>&view=dropDown`).
-3. Créer la partie par « Start an AI/Bot Game » (`botgamecreate.php`), variante Classic. Les six bots la rejoignent aussitôt ; les messages y sont ouverts (presse « Regular »).
+3. Créer la partie par « Start an AI/Bot Game » (`botgamecreate.php`), variante Classic. Les six bots la rejoignent aussitôt ; les messages y sont ouverts (presse « Regular »). **Ne pas cliquer sur « join the queue »** : la file « full-press » de l'amont cherche des bots qui n'existent pas ici, et la partie serait créée sans adversaire.
 
 Les bots soumettent leurs ordres en quelques minutes, et le bot de dialogue relève les messages toutes les 60 s.
+
+À savoir :
+
+- seule la variante Classic est proposée ; un compte ordinaire est limité à trois parties contre bots en cours ;
+- aucun compte administrateur n'est créé ;
+- les ports ne sont publiés que sur `127.0.0.1` : le site n'est pas joignable depuis une autre machine ;
+- après un redémarrage de la machine, relancer `./demarrer.sh` : il rend aux parties en cours la durée de l'arrêt ;
+- les journaux du moteur (valeur et probabilité de chaque action, par partie et par puissance) sont dans `amont/cicero/journaux_moteur` ;
+- `bot-service` (bots élémentaires qui tiennent leurs positions) reste dans le dépôt sous le profil `bots`, qu'aucun script ne lance. **Ne pas le démarrer à côté de Cicero** : il validerait des ordres à sa place.
 
 `./install.sh` est relançable : une étape déjà faite est sautée. Options : `--sans-build`, `--sans-modeles`.
 
