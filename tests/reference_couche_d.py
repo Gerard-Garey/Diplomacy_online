@@ -20,7 +20,11 @@ le jeu d'essai que `reference_jeu.py reduire` vient d'y poser n'est pas encore s
 et les attendus s'y écrivent. Ce dossier est gardé autrement : --generer commence par
 le contrôle du jeu (`reference_jeu.controler`) et refuse, sans rien écrire, un jeu qui ne
 le passe pas -- une table retouchée à la main ne correspond plus au manifeste, et les
-empreintes ne sont pas refaites par-dessus. La batterie, elle, n'appelle jamais git ici.
+empreintes ne sont pas refaites par-dessus. Le refus dit comment en sortir, selon le cas :
+une table ou l'historique qui ne correspondent plus au manifeste, et rien d'autre --
+`reference_jeu.py manifeste` si la modification est voulue, puis --generer ; toute autre
+violation (attendus/ retouché, par exemple) -- supprimer attendus/, `reference_jeu.py
+manifeste`, puis --generer. La batterie, elle, n'appelle jamais git ici.
 
 Tant que le jeu d'essai est absent ou vide, rien n'est comparé : la commande le dit
 et rend 0. Sinon, pour chaque table (phase, puissance) :
@@ -890,16 +894,47 @@ def sha_du_depot():
     return sortie.stdout.decode().strip() if sortie.returncode == 0 else None
 
 
+def _table_ou_historique_retouche(violation):
+    """Vrai si la violation est « <table ou historique> ne correspond plus au manifeste », telle que l'écrit le contrôle."""
+    parties = violation.split(" : ")
+    if len(parties) < 3 or parties[:2] != [reference_jeu.MANIFESTE, "fichiers"]:
+        return False
+    fichier, _espace, suite = parties[2].partition(" ")
+    return suite.startswith(reference_jeu.NE_CORRESPOND_PLUS) and (
+        fichier == reference_jeu.HISTORIQUE or fichier.startswith(reference_jeu.TABLES + "/"))
+
+
+def refus_du_jeu(dossier, violations):
+    """Le message du refus de --generer devant un jeu qui ne passe pas son contrôle : ce qui ne va pas, et la sortie.
+
+    Deux cas. Une table ou l'historique ne correspondent plus au manifeste, et rien d'autre : la
+    commande `manifeste` suffit, si la modification est voulue. Toute autre violation (attendus/
+    retouché, fichier en trop...) : les attendus sont à refaire, en trois temps. Ce chemin ne lève
+    pas une violation portée par le contenu d'une table ou de l'historique : le message le dit.
+    """
+    autres = [v for v in violations if not _table_ou_historique_retouche(v)]
+    tete = "REFUS : le jeu d'essai de %s ne passe pas son contrôle (%d violation(s), dont : %s) ; rien n'est écrit. " % (
+        dossier, len(violations), (autres or violations)[0])
+    manifeste = "python3 tests/reference_jeu.py manifeste --dossier %s" % dossier
+    if not autres:
+        return tete + (
+            "--generer ne change pas les tables (ADR 0006) : une table ou l'historique ne correspond plus au manifeste. "
+            "Si la modification est voulue, refaire d'abord le manifeste : %s (session principale, après visa), puis "
+            "relancer --generer." % manifeste)
+    return tete + (
+        "La violation n'est pas seulement celle d'une table ou de l'historique retouchés : refaire le manifeste ne "
+        "suffit pas. Pour refaire les attendus, en trois temps (session principale, après visa) : 1) supprimer %s ; "
+        "2) %s ; 3) relancer --generer. Une violation portée par le contenu d'une table ou de l'historique se corrige "
+        "d'abord dans le fichier : ce chemin ne la lève pas." % (dossier / reference_jeu.ATTENDUS, manifeste))
+
+
 def commande_generer(jeu, args):
     dossier = Path(args.jeu)
     # Le jeu d'essai est hors du contrôle d'arbre (HORS_MESURES) : c'est son manifeste qui le garde. Plus bas,
     # ecrire_manifeste refait toutes les empreintes ; sans ce refus, une table retouchée à la main y serait entérinée.
     violations = reference_jeu.controler(dossier)
     if violations:
-        print("REFUS : le jeu d'essai de %s ne passe pas son contrôle (%d violation(s), dont : %s) ; rien n'est écrit. "
-              "--generer ne change pas les tables (ADR 0006). Si la modification est voulue, refaire d'abord le "
-              "manifeste : python3 tests/reference_jeu.py manifeste --dossier %s (session principale, après visa)." % (
-                  dossier, len(violations), violations[0], dossier), file=sys.stderr)
+        print(refus_du_jeu(dossier, violations), file=sys.stderr)
         return 2
     modifies = arbre_modifie()
     sha = args.sha or sha_du_depot()

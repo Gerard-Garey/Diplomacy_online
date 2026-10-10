@@ -715,6 +715,13 @@ class Emplacement(AvecJeu):
         self.assertIn("tests/donnees/S1901M.json", violations[0])
         self.assertIn("emplacement unique", violations[0])
 
+    def test_nom_non_imprimable_sur_une_seule_ligne(self):
+        copie = self.ecrire("tests/donnees/S19\n01M.json", (self.dossier / "tables" / "S1901M.json").read_text(encoding="utf-8"))
+        violations = self.emplacement(copie)
+        self.assertEqual(len(violations), 1)
+        self.assertNotIn("\n", violations[0])
+        self.assertTrue(violations[0].startswith("'tests/donnees/S19\\n01M.json' : porte les clés"), violations[0])
+
     def test_dossier_au_nom_voisin(self):
         copie = self.ecrire("tests/reference2/tables/S1901M.json", (self.dossier / "tables" / "S1901M.json").read_text(encoding="utf-8"))
         self.assertEqual(len(self.emplacement(copie)), 1)
@@ -775,7 +782,11 @@ class Noms(AvecJeu):
         for relatif in ("logs/current_plans.json", "x/pseudo_commitments.json.bak", "claude_dialogue_state_3.json",
                         "current_plans_copie.json", "a/b/current_plans.jsonl", "pseudo_commitments.json.gz",
                         "claude_dialogue_state.json.tmp", "tests/reference/current_plans.json",
-                        "tests/reference/tables/pseudo_commitments.json", "Current_Plans.JSON"):
+                        "tests/reference/tables/pseudo_commitments.json", "Current_Plans.JSON",
+                        # Le nom d'état où qu'il soit dans le nom de base (décision du mainteneur, 2026-10-10).
+                        "old_current_plans.json", "logs/2026-10-10_claude_dialogue_state.json",
+                        "sauvegarde_pseudo_commitments.json.bak", " current_plans.json", "a/ current_plans.json",
+                        "tests/test_current_plans.json", "x.json.current_plans"):
             violations = [v for v in self.noms(relatif) if "fichier d'état" in v]
             self.assertEqual(len(violations), 1, relatif)
             self.assertTrue(violations[0].startswith(relatif + " : "), violations[0])
@@ -788,8 +799,39 @@ class Noms(AvecJeu):
     def test_noms_voisins_admis(self):
         self.assertEqual(self.noms(
             "pseudo_commitments.py", "cicero/overlay/fairdiplomacy/utils/pseudo_commitments.py", "current_plans.md",
-            "tests/test_current_plans.json", "plans.json", "current_plans/notes.md", "claude_dialogue_state.py",
+            "tests/test_pseudo_commitments.py", "plans.json", "current_plans/notes.md", "claude_dialogue_state.py",
         ), [])
+
+    def test_hors_de_portee_d_un_test_sur_le_nom_de_base(self):
+        """Limite écrite à côté de NOMS_D_ETAT : une autre graphie, ou le nom porté par le dossier, passent."""
+        self.assertEqual(self.noms("claude-dialogue-state.json", "current_plans/3.json", "currentplans.json"), [])
+
+    def test_le_depot_n_a_aucun_nom_d_etat_parmi_ses_fichiers_suivis(self):
+        suivis = reference_jeu.fichiers_du_depot(reference_jeu.RACINE, suivis_seuls=True)
+        self.assertTrue(suivis)
+        self.assertEqual([f for f in suivis if reference_jeu.nom_d_etat(f)], [])
+
+    def test_nom_non_imprimable_sur_une_seule_ligne(self):
+        """Un retour à la ligne dans un nom ne coupe pas la ligne d'échec : le nom est rendu par son repr."""
+        for relatif, titre in (("logs/a\nb.log", "extension .log"), ("a\ncurrent_plans.json", "fichier d'état"),
+                               ("x/sans\textension", "nom sans extension"), ("a.l\nog", "extension '.l\\nog'")):
+            violations = self.noms(relatif)
+            self.assertEqual(len(violations), 1, relatif)
+            self.assertNotIn("\n", violations[0])
+            self.assertNotIn("\t", violations[0])
+            self.assertTrue(violations[0].startswith(repr(relatif) + " : "), violations[0])
+            self.assertIn(titre, violations[0])
+        # Par la commande : une ligne « ÉCHEC » par violation, pas une de plus.
+        sortie = io.StringIO()
+        with mock.patch.object(reference_jeu, "fichiers_du_depot", lambda racine: ["logs/a\nb.log", "essai.log"]), \
+                contextlib.redirect_stdout(sortie):
+            self.assertEqual(reference_jeu.main(["controler", "--dossier", str(self.racine / "nulle_part"),
+                                                 "--racine", str(self.racine)]), 1)
+        self.assertEqual(sortie.getvalue().splitlines(), [
+            "ÉCHEC : essai.log : " + self.noms("essai.log")[0].split(" : ", 1)[1],
+            "ÉCHEC : 'logs/a\\nb.log' : " + self.noms("logs/a\nb.log")[0].split(" : ", 1)[1]])
+        # Un nom imprimable s'écrit tel quel, espaces et accents compris.
+        self.assertEqual(reference_jeu.nom_lisible("a b/é.log"), "a b/é.log")
 
     def test_extensions_refusees(self):
         for relatif, suffixe in (("releve.jsonl.gz", ".gz"), ("essai.log", ".log"), ("table.pkl", ".pkl"),
@@ -819,8 +861,12 @@ class Noms(AvecJeu):
         self.assertEqual(len(self.noms("a.")), 1)
 
     def test_les_listes_sont_celles_du_depot(self):
-        """Listes fermées : rien n'y figure qu'un fichier du dépôt ne porte (une entrée morte élargirait le contrôle)."""
-        fichiers = reference_jeu.fichiers_du_depot(reference_jeu.RACINE)
+        """Listes fermées : rien n'y figure qu'un fichier du dépôt ne porte (une entrée morte élargirait le contrôle).
+
+        Sur les seuls fichiers suivis : un fichier de travail non suivi donnerait ici un écart d'ensembles qui ne
+        le nomme pas ; c'est test_le_depot_n_a_aucun_nom_refuse qui le voit, et le nomme.
+        """
+        fichiers = reference_jeu.fichiers_du_depot(reference_jeu.RACINE, suivis_seuls=True)
         self.assertEqual({reference_jeu.extension(f) for f in fichiers} - {""}, set(reference_jeu.EXTENSIONS_ADMISES))
         self.assertEqual({f.rsplit("/", 1)[-1] for f in fichiers if not reference_jeu.extension(f)},
                          set(reference_jeu.NOMS_SANS_EXTENSION))
@@ -842,6 +888,16 @@ class Noms(AvecJeu):
         with mock.patch.dict(os.environ, git.env, clear=True):
             violations = reference_jeu.controler_noms(self.racine)
         self.assertEqual([v.split(" : ")[0] for v in violations], ["essai.log", "logs/current_plans.json"])
+
+    def test_fichiers_suivis_seuls(self):
+        """`suivis_seuls` écarte le fichier de travail non suivi, que la liste par défaut garde."""
+        git = depot_git(self.racine)
+        (self.racine / "essai.log").write_text("", encoding="utf-8")
+        with mock.patch.dict(os.environ, git.env, clear=True):
+            tous = reference_jeu.fichiers_du_depot(self.racine)
+            suivis = reference_jeu.fichiers_du_depot(self.racine, suivis_seuls=True)
+        self.assertEqual(set(tous) - set(suivis), {"essai.log"})
+        self.assertIn("tests/harnais.py", suivis)
 
     def test_la_commande_controler_appelle_le_controle_des_noms(self):
         """`controler` (celle de tests/verifier.sh) échoue sur un nom refusé, jeu conforme ou absent ; git interrogé une fois."""
@@ -1270,13 +1326,76 @@ class Sequence(AvecJeu):
             self.assertEqual(code, 2, sortie)
             self.assertIn("REFUS : le jeu d'essai", sortie)
             self.assertIn("tables/S1901M.json ne correspond plus au manifeste", sortie)
-            self.assertIn("reference_jeu.py manifeste", sortie)
+            self.assertIn("Si la modification est voulue, refaire d'abord le manifeste : python3 tests/reference_jeu.py "
+                          "manifeste --dossier %s (session principale, après visa), puis relancer --generer." % self.dossier,
+                          sortie)
+            self.assertNotIn("supprimer", sortie)
             self.assertEqual(self.etat_du_jeu(), avant)
         self.assertTrue(reference_jeu.controler(self.dossier))
         # La modification voulue passe par la commande nommée : elle se voit alors dans le diff du manifeste.
         self.assertEqual(reference_jeu.main(["manifeste", "--dossier", str(self.dossier)]), 0)
         code, sortie = self.generer()
         self.assertEqual(code, 0, sortie)
+
+    def test_generer_refuse_des_attendus_modifies_a_la_main(self):
+        """Des attendus retouchés : le refus donne le chemin en trois temps, et ce chemin aboutit."""
+        self.assertEqual(self.generer()[0], 0)
+        fichier = self.dossier / "attendus" / "S1901M.json"
+        fichier.write_text(fichier.read_text(encoding="utf-8") + "\n", encoding="utf-8")
+        avant = self.etat_du_jeu()
+        code, sortie = self.generer()
+        self.assertEqual(code, 2, sortie)
+        self.assertIn("REFUS : le jeu d'essai", sortie)
+        self.assertIn("attendus/S1901M.json ne correspond plus au manifeste", sortie)
+        self.assertIn("en trois temps (session principale, après visa) : 1) supprimer %s ; 2) python3 tests/reference_jeu.py "
+                      "manifeste --dossier %s ; 3) relancer --generer." % (self.dossier / "attendus", self.dossier), sortie)
+        self.assertNotIn("Si la modification est voulue", sortie)
+        self.assertEqual(self.etat_du_jeu(), avant)
+        # Le chemin annoncé, pas à pas.
+        shutil.rmtree(str(self.dossier / "attendus"))
+        self.assertEqual(reference_jeu.main(["manifeste", "--dossier", str(self.dossier)]), 0)
+        self.assertEqual(reference_jeu.controler(self.dossier), [])
+        code, sortie = self.generer()
+        self.assertEqual(code, 0, sortie)
+        self.assertEqual(reference_jeu.controler(self.dossier), [])
+        self.assertEqual(self.lancer()[0], 0)
+        # Le manifeste seul, lui, n'aurait pas suffi pour une clé non admise dans les attendus.
+        self.modifier("attendus/S1901M.json", lambda d: d["attendus"]["FRANCE"].update(bavardage=1))
+        code, sortie = self.generer()
+        self.assertEqual(code, 2, sortie)
+        self.assertIn("clé hors liste blanche : 'bavardage'", sortie)
+        self.assertIn("1) supprimer", sortie)
+
+    def test_les_deux_messages_du_refus(self):
+        """Une table ou l'historique retouchés seuls : la commande `manifeste` ; tout autre cas : les trois temps."""
+        perime = "manifeste.json : fichiers : %s ne correspond plus au manifeste (taille ou empreinte) : refaire le manifeste"
+        d = Path("D")
+        for violations in ([perime % "tables/S1901M.json"], [perime % "historique.json"],
+                           [perime % "historique.json", perime % "tables/F1901M.json"]):
+            message = couche_d.refus_du_jeu(d, violations)
+            self.assertIn("(%d violation(s), dont : %s)" % (len(violations), violations[0]), message)
+            self.assertIn("Si la modification est voulue", message)
+            self.assertNotIn("supprimer", message)
+        autre = "tables/S1901M.json : tables.FRANCE : clé hors liste blanche : 'bavardage'"
+        for violations, citee in (
+            ([perime % "attendus/S1901M.json"], perime % "attendus/S1901M.json"),
+            # Table et attendus retouchés ensemble : la violation citée est celle qui fait changer de cas.
+            ([perime % "tables/S1901M.json", perime % "attendus/S1901M.json"], perime % "attendus/S1901M.json"),
+            ([autre], autre),
+            (["manifeste.json : fichiers : notes.txt est dans le dossier mais pas dans le manifeste"],
+             "manifeste.json : fichiers : notes.txt est dans le dossier mais pas dans le manifeste"),
+            (["tables/S1901M.json : (racine) : JSON illisible"], "tables/S1901M.json : (racine) : JSON illisible"),
+            (["reference : manifeste absent (manifeste.json)"], "reference : manifeste absent (manifeste.json)"),
+        ):
+            message = couche_d.refus_du_jeu(d, violations)
+            self.assertIn("(%d violation(s), dont : %s)" % (len(violations), citee), message)
+            self.assertIn("1) supprimer D/attendus ; 2) python3 tests/reference_jeu.py manifeste --dossier D ; "
+                          "3) relancer --generer.", message)
+            self.assertIn("se corrige d'abord dans le fichier", message)
+            self.assertNotIn("Si la modification est voulue", message)
+        # La phrase que le message relit est celle que le contrôle écrit.
+        self.modifier("tables/S1901M.json", lambda d: d["tables"]["FRANCE"]["plans"][0].update(value=0.123456), manifeste=False)
+        self.assertEqual([couche_d._table_ou_historique_retouche(v) for v in reference_jeu.controler(self.dossier)], [True])
 
     def test_un_harnais_modifie_fait_toujours_refuser(self):
         for relatif, ligne in (("tests/harnais.py", " M tests/harnais.py"), ("cicero/overlay/bot.py", " M cicero/overlay/bot.py"),

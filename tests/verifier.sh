@@ -47,7 +47,8 @@ fi
 # chaîne qui ne soit un ordre, une puissance, une phase ou un mot du format, plafond de 512 Kio.
 # Passe sur un dossier absent ou vide. Avec lui, deux tests sur les seuls noms des fichiers du dépôt
 # (ADR 0006, annotation, point D) : aucun fichier d'état d'une instance ni aucune de ses copies
-# (current_plans, pseudo_commitments, claude_dialogue_state en .json*), extensions en liste fermée
+# (nom de base qui contient current_plans, pseudo_commitments ou claude_dialogue_state, et .json),
+# extensions en liste fermée
 # (EXTENSIONS_ADMISES de tests/reference_jeu.py : une extension nouvelle s'y ajoute dans le commit
 # qui introduit le fichier). Les contrôles de plus bas (chemin personnel, jeton,
 # donnée d'exécution) s'appliquent aussi à ce dossier.

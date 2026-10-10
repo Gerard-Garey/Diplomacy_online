@@ -60,8 +60,13 @@ LONGUEUR_ORDRE_MAX = 24
 # Contrôle des noms (ADR 0006, annotation du 2026-10-10, point D ; feuille de route, question 16), sur les
 # fichiers versionnés ou à versionner du dépôt entier. Il ne lit que des noms : ce qu'un nom ne dit pas
 # (table en littéral dans du code, fichier coupé) lui échappe, et l'ADR l'accepte par écrit.
-# Les trois fichiers d'état d'une instance (ADR 0006, décision 1), par le début de leur nom.
+# Les trois fichiers d'état d'une instance (ADR 0006, décision 1), par leur nom où qu'il soit dans le nom de
+# base (décision du mainteneur, 2026-10-10) : `old_current_plans.json`, `2026-10-10_claude_dialogue_state.json`.
+# Hors de portée d'un test sur le nom de base, et non traités : une autre graphie (`claude-dialogue-state.json`,
+# avec des tirets) et un nom porté par le dossier (`current_plans/3.json`).
 NOMS_D_ETAT = ("current_plans", "pseudo_commitments", "claude_dialogue_state")
+# Ce que le contrôle du manifeste dit d'un fichier retouché : tests/reference_couche_d.py (--generer) le relit.
+NE_CORRESPOND_PLUS = "ne correspond plus au manifeste"
 # Listes fermées, mesurées sur les 106 fichiers du dépôt le 2026-10-10. Une extension ou un nom nouveau
 # s'ajoute ici, dans le commit qui introduit le fichier : la ligne se voit dans le diff.
 EXTENSIONS_ADMISES = (
@@ -643,8 +648,8 @@ def _controler_manifeste(c, manifeste, dossier, presents, tables):
     for relatif in sorted(set(listes) & set(presents)):
         octets = (dossier / relatif).read_bytes()
         if listes[relatif]["octets"] != len(octets) or listes[relatif]["sha256"] != hashlib.sha256(octets).hexdigest():
-            c.ko("fichiers", "%s ne correspond plus au manifeste (taille ou empreinte) : "
-                 "refaire le manifeste, par la session principale après visa" % relatif)
+            c.ko("fichiers", "%s %s (taille ou empreinte) : "
+                 "refaire le manifeste, par la session principale après visa" % (relatif, NE_CORRESPOND_PLUS))
     if manifeste["taille_octets"] != sum(f["octets"] for f in listes.values() if _entier(f["octets"])):
         c.ko("taille_octets", "n'est pas la somme des tailles des fichiers listés")
 
@@ -743,13 +748,23 @@ def porte_une_table(chemin):
     return all(cle in trouvees for cle in CLES_TABLE)
 
 
-def fichiers_du_depot(racine):
-    """Fichiers versionnés ou à versionner (non ignorés) du dépôt, relatifs à sa racine."""
+def fichiers_du_depot(racine, suivis_seuls=False):
+    """Fichiers versionnés ou à versionner (non ignorés) du dépôt, relatifs à sa racine.
+
+    `suivis_seuls` : les seuls fichiers versionnés, sans ceux de l'arbre de travail qui ne le sont pas encore.
+    """
+    selection = ["--cached"] if suivis_seuls else ["--cached", "--others", "--exclude-standard"]
     sortie = subprocess.run(
-        ["git", "-C", str(racine), "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
+        ["git", "-C", str(racine), "ls-files", "-z"] + selection,
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True,
     )
     return [f for f in sortie.stdout.decode("utf-8", "replace").split("\0") if f]
+
+
+def nom_lisible(relatif):
+    """Le nom tel qu'il s'écrit dans une ligne d'échec : lui-même, ou son `repr` s'il porte un caractère
+    non imprimable (un retour à la ligne couperait la ligne et en détacherait le motif du refus)."""
+    return relatif if relatif.isprintable() else repr(relatif)
 
 
 def controler_emplacement(racine=RACINE, fichiers=None):
@@ -763,7 +778,7 @@ def controler_emplacement(racine=RACINE, fichiers=None):
         if (racine / relatif).is_file() and porte_une_table(racine / relatif):
             violations.append(
                 "%s : porte les clés %s d'une table de recherche hors de %s/ (emplacement unique, ADR 0006)"
-                % (relatif, ", ".join(CLES_TABLE), EMPLACEMENT)
+                % (nom_lisible(relatif), ", ".join(CLES_TABLE), EMPLACEMENT)
             )
     return violations
 
@@ -771,11 +786,12 @@ def controler_emplacement(racine=RACINE, fichiers=None):
 def nom_d_etat(relatif):
     """Vrai si le nom de base est celui d'un fichier d'état d'une instance ou d'une de ses copies.
 
-    Commence par l'un des NOMS_D_ETAT et contient « .json » : aussi `.json.bak`, `.json.gz`,
-    `.jsonl`, `current_plans_copie.json` ; pas `pseudo_commitments.py`. Sans égard à la casse.
+    Contient l'un des NOMS_D_ETAT et contient « .json » : aussi `.json.bak`, `.json.gz`, `.jsonl`,
+    `current_plans_copie.json`, `old_current_plans.json` ; pas `pseudo_commitments.py` ni
+    `test_pseudo_commitments.py`. Sans égard à la casse.
     """
     nom = relatif.rsplit("/", 1)[-1].lower()
-    return nom.startswith(NOMS_D_ETAT) and ".json" in nom
+    return any(etat in nom for etat in NOMS_D_ETAT) and ".json" in nom
 
 
 def extension(relatif):
@@ -794,10 +810,11 @@ def controler_noms(racine=RACINE, fichiers=None):
     fichiers = fichiers_du_depot(racine) if fichiers is None else fichiers
     violations = []
     for relatif in sorted(fichiers):
+        lisible = nom_lisible(relatif)
         if nom_d_etat(relatif):
             violations.append(
-                "%s : nom d'un fichier d'état d'une instance (%s*.json*) : il n'entre pas au dépôt, "
-                "même en copie ou en sauvegarde (ADR 0006, décision 1)" % (relatif, ", ".join(NOMS_D_ETAT))
+                "%s : nom d'un fichier d'état d'une instance (nom de base qui contient %s, et « .json ») : il n'entre "
+                "pas au dépôt, même en copie ou en sauvegarde (ADR 0006, décision 1)" % (lisible, ", ".join(NOMS_D_ETAT))
             )
         suffixe, nom = extension(relatif), relatif.rsplit("/", 1)[-1]
         if suffixe and suffixe not in EXTENSIONS_ADMISES:
@@ -805,13 +822,13 @@ def controler_noms(racine=RACINE, fichiers=None):
                 "%s : extension %s hors de la liste fermée (%s) : un relevé, une sauvegarde ou une table sous un autre "
                 "type n'entre pas au dépôt (ADR 0006). Si le fichier est légitime, ajouter son extension à "
                 "EXTENSIONS_ADMISES (tests/reference_jeu.py) dans le commit qui l'introduit"
-                % (relatif, suffixe, " ".join(EXTENSIONS_ADMISES))
+                % (lisible, nom_lisible(suffixe), " ".join(EXTENSIONS_ADMISES))
             )
         elif not suffixe and nom not in NOMS_SANS_EXTENSION:
             violations.append(
                 "%s : nom sans extension hors de la liste fermée (%s). Si le fichier est légitime, ajouter son nom à "
                 "NOMS_SANS_EXTENSION (tests/reference_jeu.py) dans le commit qui l'introduit"
-                % (relatif, " ".join(NOMS_SANS_EXTENSION))
+                % (lisible, " ".join(NOMS_SANS_EXTENSION))
             )
     return violations
 
