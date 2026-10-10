@@ -93,6 +93,22 @@ reproductible (les autres recherches rendent unknown_value), mais rien ne dit
 que son gain soit du bruit ; elle relève de l'instabilité de l'ensemble des
 candidats, que mesure déjà l'attribution à unknown_value.
 
+Décompte par événement (informatif, hors verdict : le critère publié reste le
+verdict par observation ; décision du mainteneur, 2026-10-10). Unité : le couple
+(table, E), E étant la promesse rompue, sur les recherches A sans engagement
+seules, jugé par la règle entière à la marge du bot. Exposé : au moins un N
+sans gain (le couple (E, N) est dans la table et dans au moins une autre du
+groupe, et la moyenne de G sur ces autres tables est <= 0). (a) : part des
+(table, E) exposés qui ont au moins une acceptation sur bruit. (b) : part des
+remplacements acceptés qui sont sur bruit (les acceptations sans autre table
+sont au dénominateur, jamais au numérateur). Lecture indicative : « protégerait »
+si (a) <= 1 % et (b) <= 5 % ; « ne protégerait pas » si (a) > 5 % ou
+(b) > 20 % ; « partiel » entre les deux ; « indéterminée » sans (table, E)
+exposé. Deux lignes de plus : la restriction aux promesses « réalistes » (E est
+un ordre d'un des plans exportés de la table jugée, ce que Claude voit), et le
+rappel « marge seule » (G > marge sans la condition (e) : les acceptations du
+critère par observation, comptées par événement).
+
 Effet de la recherche B, apparié. Unité : le tirage (fichier, tirage) où
 coexistent la recherche A sans engagement et la table du groupe.
 delta = G_B - G_A dans le tirage ; effet = moyenne des delta ; erreur type
@@ -201,6 +217,11 @@ CLASSES_REGLE = (
     ("table_a_jour", "table à jour", "E est un engagement du groupe : la table a été calculée sous la promesse"),
     ("table_anterieure", "table antérieure", "E n'était pas dans la recherche : le bot est en avance sur le moteur"),
 )
+# Décompte par événement (avis d'expert-cicero du 2026-10-10 sur #26, § 1.1), en parts : (a) des (table, E)
+# exposés, (b) des remplacements acceptés. Informatif : aucun de ces seuils n'entre dans le verdict.
+PROTEGERAIT_A, PROTEGERAIT_B = 0.01, 0.05
+NE_PROTEGERAIT_PAS_A, NE_PROTEGERAIT_PAS_B = 0.05, 0.20
+LECTURES_PAR_EVENEMENT = ("protégerait", "partiel", "ne protégerait pas", "indéterminée")
 DESTINATAIRE = "X"  # à qui les promesses rejouées sont faites : un seul, son nom n'entre dans aucune issue
 # Témoin du chargement : deux actions d'une unité, lambda nul (le score est la valeur). Rompre
 # BUR pour PIC gagne 0,10 et PIC est l'action de tête : la règle remplace. Sous la doublure
@@ -800,11 +821,13 @@ def scenarios_de_la_regle(tables, rejeter, order_loc, marges):
                         % (ancien, nouveau, nom_groupe(cle), sans_marge))
                 g = [t["g"].get((ancien, nouveau)) for t in membres]
                 # Deux comptes disjoints : sans autre table qui porte le couple, rien ne dit que le gain soit du bruit.
-                sur_bruit, sans_autre = [], []
+                sur_bruit, sans_autre, sans_gain = [], [], []
                 for i, (issue, _gain) in enumerate(rendus):
                     autres = [x for j, x in enumerate(g) if j != i and x is not None]
                     sans_autre.append(issue == "remplace" and not autres)
                     sur_bruit.append(issue == "remplace" and bool(autres) and sum(autres) / len(autres) <= 0)
+                    # La population à risque du décompte par événement : le couple est dans la table et ailleurs.
+                    sans_gain.append(g[i] is not None and bool(autres) and sum(autres) / len(autres) <= 0)
                 lignes.append({
                     "groupe": cle, "position": cle[:3], "couple": (ancien, nouveau),
                     "classe": CLASSES_REGLE[0][0] if ancien in engages else CLASSES_REGLE[1][0],
@@ -812,7 +835,7 @@ def scenarios_de_la_regle(tables, rejeter, order_loc, marges):
                     "issues": [issue for issue, _gain in rendus], "gains": [gain for _issue, gain in rendus],
                     "sans_marge": sans_marge,
                     "par_marge": {cle_marge(m): [issue for issue, _gain in issues(m)] for m in marges},
-                    "sur_bruit": sur_bruit, "sans_autre_table": sans_autre,
+                    "sur_bruit": sur_bruit, "sans_autre_table": sans_autre, "sans_gain": sans_gain,
                 })
     return lignes, impossibles, seuls
 
@@ -864,8 +887,9 @@ def bloc_regle(lignes, marges):
     return bloc
 
 
-def regle_entiere(tables, rejeter, order_loc, marges):
-    lignes, impossibles, seuls = scenarios_de_la_regle(tables, rejeter, order_loc, marges)
+def regle_entiere(tables, rejeter, order_loc, marges, scenarios=None):
+    """`scenarios` : le retour de scenarios_de_la_regle, quand il a déjà été calculé (la règle n'est pas rejouée deux fois)."""
+    lignes, impossibles, seuls = scenarios or scenarios_de_la_regle(tables, rejeter, order_loc, marges)
     sortie = {
         "appel": "_reject_contradictions([N], {%r: engagements du groupe sauf E, puis E}, plans, betray=[E], "
                  "order_values, candidates, search) sur chaque table du groupe" % DESTINATAIRE,
@@ -900,6 +924,108 @@ def regle_entiere(tables, rejeter, order_loc, marges):
             ],
         }
     return sortie
+
+
+# ---------------------------------------------------------------------------
+# Décompte par événement (table, E) -- informatif, hors verdict
+# ---------------------------------------------------------------------------
+
+def lecture_par_evenement(part_a, part_b):
+    """Lecture indicative des deux parts ; `part_b` None (aucun remplacement accepté) vaut 0."""
+    if part_a is None:
+        return LECTURES_PAR_EVENEMENT[3]
+    part_b = part_b or 0.0
+    if part_a > NE_PROTEGERAIT_PAS_A or part_b > NE_PROTEGERAIT_PAS_B:
+        return LECTURES_PAR_EVENEMENT[2]
+    if part_a <= PROTEGERAIT_A and part_b <= PROTEGERAIT_B:
+        return LECTURES_PAR_EVENEMENT[0]
+    return LECTURES_PAR_EVENEMENT[1]
+
+
+def _bloc_evenements(exposes, fautifs, acceptations, sur_bruit, positions, sans_autre=None):
+    """Les deux parts et, pour la règle entière (`sans_autre` donné), leur lecture.
+
+    `exposes`, `fautifs` : ensembles de (table, E) ; `positions` : {table: position}."""
+    bloc = {
+        "exposes": len(exposes), "avec_acceptation_sur_bruit": len(fautifs), "part_a": _part(len(fautifs), len(exposes)),
+        "acceptations": acceptations, "acceptations_sur_bruit": sur_bruit, "part_b": _part(sur_bruit, acceptations),
+        "tables_sur_bruit": len({table for table, _e in fautifs}),
+        "positions_sur_bruit": len({positions[table] for table, _e in fautifs}),
+        "evenements_sur_bruit": [{"table": table, "ancien": e} for table, e in sorted(fautifs)],
+    }
+    bloc["lecture_indicative"] = None  # la marge seule est un rappel : l'unité se juge par la règle entière
+    if sans_autre is not None:
+        bloc["dont_acceptations_sans_autre_table"] = sans_autre
+        bloc["lecture_indicative"] = lecture_par_evenement(bloc["part_a"], bloc["part_b"])
+    return bloc
+
+
+def decompte_par_evenement(tables, lignes, marge):
+    """Décompte par événement (table, E) sur les recherches A sans engagement -- informatif, hors verdict.
+
+    `lignes` : les scénarios de scenarios_de_la_regle (issues à la marge du bot). Trois lectures : la
+    règle entière ; la même restreinte aux promesses « réalistes » (E dans un des plans exportés de la
+    table jugée) ; la marge seule (G > marge, sans la condition (e)), en rappel."""
+    de_a = tables_du_niveau(tables, NIVEAU_DE_LA_SPECIFICATION)
+    positions = {t["nom"]: t["position"] for t in de_a}
+    de_a_seules = [ligne for ligne in lignes if not ligne["groupe"][3] and ligne["groupe"][4] == TYPE_SANS_ENGAGEMENT]
+    # Les tables jugées : celles des groupes d'au moins deux tables, les seuls que la règle rejoue.
+    jugees = {table for ligne in de_a_seules for table in ligne["tables"]}
+    dans_les_plans = {
+        t["nom"]: {o for plan in (t["entree"].get("plans") or []) if isinstance(plan, dict) for o in plan.get("orders") or []}
+        for t in de_a}
+
+    def regle(realiste):
+        exposes, fautifs, acceptations, sur_bruit, sans_autre = set(), set(), 0, 0, 0
+        for ligne in de_a_seules:
+            ancien = ligne["couple"][0]
+            for i, table in enumerate(ligne["tables"]):
+                if realiste and ancien not in dans_les_plans[table]:
+                    continue
+                if ligne["sans_gain"][i]:
+                    exposes.add((table, ancien))
+                acceptations += ligne["issues"][i] == "remplace"
+                sans_autre += ligne["sans_autre_table"][i]
+                if ligne["sur_bruit"][i]:
+                    sur_bruit += 1
+                    fautifs.add((table, ancien))
+        return _bloc_evenements(exposes, fautifs, acceptations, sur_bruit, positions, sans_autre)
+
+    obs, _tailles, _seuls = observations(de_a, NIVEAU_DE_LA_SPECIFICATION)
+    sans_gain = [o for o in obs if o["reference"] <= 0]
+    acceptees = [o for o in obs if o["g"] > marge]
+    acceptees_sur_bruit = [o for o in acceptees if o["reference"] <= 0]
+    return {
+        "statut": "informatif, hors verdict : le critère publié reste le verdict par observation "
+                  "(décision du mainteneur, 2026-10-10)",
+        "unite": "(table, E) : une recherche %s sans engagement et une promesse rompue E ; exposé si au moins un N est "
+                 "sans gain (couple (E, N) dans la table et dans une autre du groupe, moyenne de G sur les autres <= 0)"
+                 % TYPE_SANS_ENGAGEMENT,
+        "niveau": NIVEAU_DE_LA_SPECIFICATION, "marge": marge,
+        "tables": len(jugees), "positions": len({positions[table] for table in jugees}),
+        "parts": {
+            "a": "part des (table, E) exposés qui ont au moins une acceptation sur bruit",
+            "b": "part des remplacements acceptés qui sont sur bruit",
+        },
+        "seuils": {
+            "protegerait": "(a) <= %s et (b) <= %s" % (PROTEGERAIT_A, PROTEGERAIT_B),
+            "ne_protegerait_pas": "(a) > %s ou (b) > %s" % (NE_PROTEGERAIT_PAS_A, NE_PROTEGERAIT_PAS_B),
+            "partiel": "entre les deux",
+        },
+        "regle_entiere": regle(False),
+        "regle_entiere_promesses_realistes": regle(True),
+        "marge_seule": _bloc_evenements(
+            {(o["table"], o["couple"][0]) for o in sans_gain}, {(o["table"], o["couple"][0]) for o in acceptees_sur_bruit},
+            len(acceptees), len(acceptees_sur_bruit), positions),
+        "limites": [
+            "informatif : n'entre pas dans le verdict, et ses seuils ne sont pas un critère publié",
+            "les recherches A sans engagement sont la classe « table antérieure » (le bot en avance sur le moteur) : "
+            "rien ici sur une table calculée sous la promesse",
+            "« réaliste » : E est un ordre d'un des plans exportés de la table jugée, une hypothèse sur ce que Claude "
+            "promet ; aucune promesse réelle n'est rejouée",
+            "peu d'événements : un ou deux (table, E) déplacent la lecture",
+        ],
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -1481,6 +1607,7 @@ def analyser(tables, lecture, marge, rejeter, order_loc, marges=MARGES_BALAYEES,
     effet = effet_engagement(tables)
     effet["apparie"] = effet_apparie(tables, marge)
     dispersions = dispersion(tables)
+    scenarios = scenarios_de_la_regle(tables, rejeter, order_loc, marges)
     return {
         "mesure": "bruit des valeurs d'une recherche à l'autre (#26)",
         "portee": portee(lecture),
@@ -1506,9 +1633,11 @@ def analyser(tables, lecture, marge, rejeter, order_loc, marges=MARGES_BALAYEES,
         "bruit": bruit,
         "paires": synthese_paires(tables, marges),
         "effet_engagement": effet,
-        "regle_entiere": regle_entiere(tables, rejeter, order_loc, marges),
+        "regle_entiere": regle_entiere(tables, rejeter, order_loc, marges, scenarios),
         "dispersion": dispersions,
         "verdict": {nom: verdict(bruit[nom], marge, nom, dispersions["mises_en_garde"]) for nom, _ in NIVEAUX},
+        # Informatif, à côté du verdict : il n'en lit rien et n'y change rien.
+        "par_evenement": decompte_par_evenement(tables, scenarios[0], marge),
     }
 
 
@@ -1651,6 +1780,42 @@ def _tableau_regle(regle, marge):
     l.append("  unanime ; motif n.u. : issues non toutes égales ; désaccord : k x (n - k) paires de tables en désaccord")
     l.append("  sur n x (n - 1) / 2, la probabilité que deux recherches de la même position décident différemment.")
     for limite in regle["limites"]:
+        l.append("  limite : %s." % limite)
+    return l
+
+
+def _fraction(n, total):
+    """« 2/1270 (0.16 %) »."""
+    return "%d/%d (%s)" % (n, total, "-" if not total else "%.2f %%" % (100.0 * n / total))
+
+
+def _tableau_evenements(evenements):
+    l = [""]
+    l.append("Décompte par événement (table, E), recherches A sans engagement, marge %s -- informatif, hors verdict"
+             % cle_marge(evenements["marge"]))
+    l.append("  le critère publié reste le verdict par observation ci-dessus (décision du mainteneur, 2026-10-10).")
+    l.append("  unité : %s." % evenements["unite"])
+    l.append("  (a) %s ; (b) %s." % (evenements["parts"]["a"], evenements["parts"]["b"]))
+    l.append("  %-44s %20s %20s %8s %10s  %s" % ("", "(a)", "(b)", "tables", "positions", "lecture indicative"))
+    for titre, cle in (("règle entière", "regle_entiere"),
+                       ("règle entière, promesses « réalistes »", "regle_entiere_promesses_realistes"),
+                       ("marge seule (rappel)", "marge_seule")):
+        bloc = evenements[cle]
+        l.append("  %-44s %20s %20s %8s %10s  %s" % (
+            titre, _fraction(bloc["avec_acceptation_sur_bruit"], bloc["exposes"]),
+            _fraction(bloc["acceptations_sur_bruit"], bloc["acceptations"]),
+            "%d/%d" % (bloc["tables_sur_bruit"], evenements["tables"]),
+            "%d/%d" % (bloc["positions_sur_bruit"], evenements["positions"]), bloc["lecture_indicative"] or "-"))
+    l.append("  lecture indicative : « protégerait » si %s ; « ne protégerait pas » si %s ; « partiel » %s ; aucune pour"
+             % (evenements["seuils"]["protegerait"], evenements["seuils"]["ne_protegerait_pas"],
+                evenements["seuils"]["partiel"]))
+    l.append("  la marge seule, que nul message ne subit seule. tables, positions : celles qui portent un (table, E) avec")
+    l.append("  acceptation sur bruit, sur celles des groupes d'au moins deux tables.")
+    l.append("  « réalistes » : E est un ordre d'un des plans exportés de la table jugée. Marge seule : G > marge, sans la")
+    l.append("  condition (e). Au dénominateur de (b), règle entière : %d acceptation(s) sans autre table (%d en réaliste)."
+             % (evenements["regle_entiere"]["dont_acceptations_sans_autre_table"],
+                evenements["regle_entiere_promesses_realistes"]["dont_acceptations_sans_autre_table"]))
+    for limite in evenements["limites"]:
         l.append("  limite : %s." % limite)
     return l
 
@@ -1889,6 +2054,7 @@ def tableau(resultat):
     l.append("  Portée : %s." % resultat["portee"])
     if resultat["reporte"]:
         l.append("  Reporté : %s." % " ; ".join(resultat["reporte"]))
+    l.extend(_tableau_evenements(resultat["par_evenement"]))
     return "\n".join(l)
 
 

@@ -807,6 +807,143 @@ class RegleEntiere(unittest.TestCase):
         self.assertRegex(erreur, r"^bruit_valeurs : .*motif inattendu « below_margin »")
 
 
+class ParEvenement(unittest.TestCase):
+    """Décompte par événement (table, E) : informatif, à côté du verdict par observation, qu'il ne change pas."""
+
+    # Une unité, trois recherches A sans engagement, lambda nul (le score est la valeur) :
+    #   T1 : PIC 0,40  BUR 0,30    G(BUR, PIC) = +0,10   G(PIC, BUR) = -0,10   plans exportés : (PIC)
+    #   T2 : BUR 0,30  PIC 0,25    G(BUR, PIC) = -0,05   G(PIC, BUR) = +0,05   plans exportés : (BUR), (PIC)
+    #   T3 : BUR 0,30  PIC 0,29    G(BUR, PIC) = -0,01   G(PIC, BUR) = +0,01   plans exportés : (BUR)
+    TROIS = (
+        ([((PIC,), 0.40), ((BUR,), 0.30)], [[PIC]]),
+        ([((BUR,), 0.30), ((PIC,), 0.25)], [[BUR], [PIC]]),
+        ([((BUR,), 0.30), ((PIC,), 0.29)], [[BUR]]),
+    )
+
+    def lancer(self, tables, recherche="A", engagements=()):
+        d = Dossier(self)
+        lignes = []
+        for i, (actions, plans) in enumerate(tables):
+            ligne = table_regle(actions, recherche=recherche, engagements=engagements, tirage=i)
+            if plans is not None:
+                ligne["entree"]["plans"] = [{"rank": rang + 1, "orders": ordres} for rang, ordres in enumerate(plans)]
+            lignes.append(ligne)
+        d.ecrire("m1_9_a.jsonl", lignes)
+        code, sortie, erreur, detail = d.lancer()
+        self.assertEqual((code, erreur), (0, ""))
+        return sortie, detail
+
+    def test_trois_tables_une_acceptation_sur_bruit(self):
+        sortie, detail = self.lancer(self.TROIS)
+        e = detail["par_evenement"]
+        self.assertEqual((e["niveau"], e["marge"], e["tables"], e["positions"]), ("recherches_a", 0.05, 3, 1))
+        # Exposés, moyenne de G sur les autres tables <= 0 : (T1, BUR) par PIC, moyenne (-0,05 - 0,01) / 2 = -0,03 ;
+        # (T2, PIC) par BUR, (-0,10 + 0,01) / 2 = -0,045 ; (T3, PIC) par BUR, (-0,10 + 0,05) / 2 = -0,025.
+        # Non exposés : (T2, BUR), (0,10 - 0,01) / 2 > 0 ; (T3, BUR), (0,10 - 0,05) / 2 > 0 ; (T1, PIC), 0,03 > 0.
+        # Règle : seul BUR -> PIC dans T1 est remplacé (gain 0,10, PIC en tête) ; PIC -> BUR dans T2 gagne
+        # 0,05, qui ne dépasse pas la marge. (a) = 1 / 3 ; (b) = 1 / 1 : au-delà des deux seuils hauts.
+        regle = e["regle_entiere"]
+        self.assertEqual((regle["exposes"], regle["avec_acceptation_sur_bruit"]), (3, 1))
+        self.assertEqual((regle["acceptations"], regle["acceptations_sur_bruit"]), (1, 1))
+        self.assertAlmostEqual(regle["part_a"], 1 / 3)
+        self.assertEqual((regle["part_b"], regle["dont_acceptations_sans_autre_table"]), (1.0, 0))
+        self.assertEqual((regle["tables_sur_bruit"], regle["positions_sur_bruit"]), (1, 1))
+        self.assertEqual(regle["evenements_sur_bruit"], [{"table": "m1_9_a.jsonl:1", "ancien": BUR}])
+        self.assertEqual(regle["lecture_indicative"], "ne protégerait pas")
+        # Réalistes, E dans les plans exportés de la table jugée : BUR n'est pas dans ceux de T1, PIC pas
+        # dans ceux de T3. Reste (T2, PIC), exposé, sans remplacement : (a) = 0 / 1, (b) sans dénominateur.
+        realiste = e["regle_entiere_promesses_realistes"]
+        self.assertEqual((realiste["exposes"], realiste["avec_acceptation_sur_bruit"], realiste["part_a"]), (1, 0, 0.0))
+        self.assertEqual((realiste["acceptations"], realiste["acceptations_sur_bruit"], realiste["part_b"]), (0, 0, None))
+        self.assertEqual(realiste["lecture_indicative"], "protégerait")
+        # Marge seule : G > 0,05 pour BUR -> PIC dans T1 seulement. Mêmes exposés ; un rappel, sans lecture.
+        seule = e["marge_seule"]
+        self.assertEqual((seule["exposes"], seule["avec_acceptation_sur_bruit"]), (3, 1))
+        self.assertEqual((seule["acceptations"], seule["acceptations_sur_bruit"], seule["lecture_indicative"]), (1, 1, None))
+        self.assertNotIn("dont_acceptations_sans_autre_table", seule)
+        # Le rappel recoupe le niveau du critère : mêmes acceptations, mêmes couples (table, E).
+        a_marge = detail["bruit"]["recherches_a"]["total"]["par_marge"]["0.05"]
+        self.assertEqual((seule["acceptations"], seule["acceptations_sur_bruit"], seule["avec_acceptation_sur_bruit"]),
+                         (a_marge["acceptations"], a_marge["acceptations_sur_bruit"], a_marge["ordres_sur_bruit"]))
+        self.assertRegex(sortie, r"\n  règle entière +1/3 \(33\.33 %\) +1/1 \(100\.00 %\) +1/3 +1/1  ne protégerait pas\n")
+        self.assertRegex(sortie, r"\n  règle entière, promesses « réalistes » +0/1 \(0\.00 %\) +0/0 \(-\) +0/3 +0/1  protégerait\n")
+        self.assertRegex(sortie, r"\n  marge seule \(rappel\) +1/3 \(33\.33 %\) +1/1 \(100\.00 %\) +1/3 +1/1  -\n")
+
+    def test_acceptation_sans_autre_table_au_denominateur_seulement(self):
+        # Les quatre tables de TABLES_REGLE en recherche A. G(PIC, BUR) = -0,10 (T1), -0,03 (T2), -0,10 (T4) :
+        # (T1, PIC), (T2, PIC) et (T4, PIC) sont exposés, aucun n'est remplacé. BUR -> PIC : moyennes des
+        # autres tables > 0, personne n'est exposé. GAS n'est que dans T4 : ni exposé ni sur bruit.
+        # Remplacements : BUR -> PIC dans T1, BUR -> GAS et PIC -> GAS dans T4 (sans autre table) : 3, dont 0
+        # sur bruit. (a) = 0 / 3, (b) = 0 / 3.
+        _sortie, detail = self.lancer([(actions, None) for actions in TABLES_REGLE])
+        regle = detail["par_evenement"]["regle_entiere"]
+        self.assertEqual((regle["exposes"], regle["avec_acceptation_sur_bruit"], regle["part_a"]), (3, 0, 0.0))
+        self.assertEqual((regle["acceptations"], regle["acceptations_sur_bruit"], regle["part_b"]), (3, 0, 0.0))
+        self.assertEqual((regle["dont_acceptations_sans_autre_table"], regle["lecture_indicative"]), (2, "protégerait"))
+        # Marge seule : une observation demande deux tables ; G > 0,05 pour BUR -> PIC dans T1 et T4.
+        self.assertEqual(detail["par_evenement"]["marge_seule"]["acceptations"], 2)
+        # Aucun plan exporté dans ces tables : rien n'est « réaliste ».
+        realiste = detail["par_evenement"]["regle_entiere_promesses_realistes"]
+        self.assertEqual((realiste["exposes"], realiste["acceptations"], realiste["lecture_indicative"]), (0, 0, "indéterminée"))
+
+    def test_moyenne_des_autres_tables_exactement_nulle(self):
+        # Deux recherches A : PIC 0,40 / BUR 0,30, puis PIC 0,30 / BUR 0,30 (G = 0). Borne comprise partout :
+        # (T1, BUR) par PIC, autre table G = 0 : exposé, et remplacé (gain 0,10, PIC en tête) -> sur bruit ;
+        # (T1, PIC) par BUR, autre table G = 0 : exposé ; (T2, PIC) par BUR, autre table -0,10 : exposé ;
+        # (T2, BUR) par PIC, autre table +0,10 : non. Avec « < 0 », il ne resterait que (T2, PIC), sans fautif.
+        _sortie, detail = self.lancer([([((PIC,), 0.40), ((BUR,), 0.30)], None), ([((PIC,), 0.30), ((BUR,), 0.30)], None)])
+        for cle in ("regle_entiere", "marge_seule"):
+            bloc = detail["par_evenement"][cle]
+            self.assertEqual((bloc["exposes"], bloc["avec_acceptation_sur_bruit"]), (3, 1), cle)
+            self.assertEqual((bloc["acceptations"], bloc["acceptations_sur_bruit"]), (1, 1), cle)
+            self.assertEqual(bloc["evenements_sur_bruit"], [{"table": "m1_9_a.jsonl:1", "ancien": BUR}], cle)
+
+    def test_les_recherches_b_n_y_entrent_pas(self):
+        _sortie, detail = self.lancer(self.TROIS, recherche="B", engagements=[BUR])
+        e = detail["par_evenement"]
+        self.assertEqual((e["tables"], e["positions"]), (0, 0))
+        for cle in ("regle_entiere", "regle_entiere_promesses_realistes", "marge_seule"):
+            self.assertEqual((e[cle]["exposes"], e[cle]["acceptations"], e[cle]["part_a"]), (0, 0, None))
+        self.assertEqual(e["regle_entiere"]["lecture_indicative"], "indéterminée")
+
+    def test_lecture_aux_bornes(self):
+        lire = bruit.lecture_par_evenement
+        self.assertEqual((bruit.PROTEGERAIT_A, bruit.PROTEGERAIT_B), (0.01, 0.05))
+        self.assertEqual((bruit.NE_PROTEGERAIT_PAS_A, bruit.NE_PROTEGERAIT_PAS_B), (0.05, 0.20))
+        self.assertEqual(lire(0.01, 0.05), "protégerait")  # bornes comprises
+        self.assertEqual(lire(0.0101, 0.0), "partiel")
+        self.assertEqual(lire(0.0, 0.0501), "partiel")
+        self.assertEqual(lire(0.05, 0.20), "partiel")  # bornes hautes comprises
+        self.assertEqual(lire(0.0501, 0.0), "ne protégerait pas")
+        self.assertEqual(lire(0.0, 0.2001), "ne protégerait pas")
+        self.assertEqual(lire(0.0, None), "protégerait")  # aucun remplacement accepté : aucun sur bruit
+        self.assertEqual(lire(None, 0.0), "indéterminée")  # aucun (table, E) exposé
+
+    def test_hors_verdict(self):
+        # Le décompte dit « ne protégerait pas », le verdict par observation ne le lit pas : mêmes clés, même
+        # issue qu'un verdict calculé sans lui, et le tableau le range après le verdict, comme informatif.
+        sortie, detail = self.lancer(self.TROIS)
+        v = detail["verdict"]["recherches_a"]
+        self.assertEqual(detail["par_evenement"]["regle_entiere"]["lecture_indicative"], "ne protégerait pas")
+        self.assertEqual(v, bruit.verdict(detail["bruit"]["recherches_a"], 0.05, "recherches_a",
+                                          detail["dispersion"]["mises_en_garde"]))
+        self.assertNotIn("par_evenement", v)
+        self.assertIn("informatif, hors verdict", detail["par_evenement"]["statut"])
+        self.assertLess(sortie.index("Verdict selon le critère"), sortie.index("Décompte par événement (table, E)"))
+        self.assertIn("-- informatif, hors verdict\n  le critère publié reste le verdict par observation", sortie)
+
+    def test_la_regle_n_est_rejouee_qu_une_fois(self):
+        # regle_entiere reçoit les scénarios déjà calculés ; sans eux, elle les calcule comme avant.
+        _marge, order_loc, _chemin = bruit.charger_regle()
+        module, _bot = bruit.charger_bot()
+        d = Dossier(self)
+        d.ecrire("m1_9_a.jsonl", [table_regle(a, tirage=i) for i, a in enumerate(TABLES_REGLE)])
+        tables, _lecture = bruit.lire_releves(d.chemin, order_loc)
+        scenarios = bruit.scenarios_de_la_regle(tables, module._reject_contradictions, order_loc, (0.05,))
+        avec = bruit.regle_entiere(tables, None, order_loc, (0.05,), scenarios)  # None : la règle n'est pas appelée
+        self.assertEqual(avec, bruit.regle_entiere(tables, module._reject_contradictions, order_loc, (0.05,)))
+
+
 class Student(unittest.TestCase):
     def test_table_recalculee_par_integration(self):
         # La table codée, contre la dichotomie sur l'intégrale de la densité, et contre les valeurs
