@@ -17,7 +17,10 @@ deviennent (rien n'est écrasé sans être montré). Il lit l'état du dépôt p
 sauf --arbre-modifie, qui note alors le SHA suivi de « -modifie » ; sans git, --sha
 est obligatoire. L'arbre contrôlé est cicero/overlay et tests/, sauf tests/reference/ :
 le jeu d'essai que `reference_jeu.py reduire` vient d'y poser n'est pas encore suivi,
-et les attendus s'y écrivent. La batterie, elle, n'appelle jamais git ici.
+et les attendus s'y écrivent. Ce dossier est gardé autrement : --generer commence par
+le contrôle du jeu (`reference_jeu.controler`) et refuse, sans rien écrire, un jeu qui ne
+le passe pas -- une table retouchée à la main ne correspond plus au manifeste, et les
+empreintes ne sont pas refaites par-dessus. La batterie, elle, n'appelle jamais git ici.
 
 Tant que le jeu d'essai est absent ou vide, rien n'est comparé : la commande le dit
 et rend 0. Sinon, pour chaque table (phase, puissance) :
@@ -863,7 +866,9 @@ def arbre_modifie():
     """Fichiers modifiés ou non suivis sous MESURES, hors HORS_MESURES, d'après git (lecture seule) ; None si git ne répond pas."""
     try:
         sortie = subprocess.run(
-            ["git", "--no-optional-locks", "-C", str(RACINE), "status", "--porcelain", "--"] + list(MESURES)
+            # --untracked-files : status.showUntrackedFiles=no, chez l'appelant, cacherait un harnais non suivi.
+            ["git", "--no-optional-locks", "-C", str(RACINE), "status", "--porcelain", "--untracked-files=normal", "--"]
+            + list(MESURES)
             + [":(exclude)" + HORS_MESURES],
             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
         )
@@ -887,6 +892,15 @@ def sha_du_depot():
 
 def commande_generer(jeu, args):
     dossier = Path(args.jeu)
+    # Le jeu d'essai est hors du contrôle d'arbre (HORS_MESURES) : c'est son manifeste qui le garde. Plus bas,
+    # ecrire_manifeste refait toutes les empreintes ; sans ce refus, une table retouchée à la main y serait entérinée.
+    violations = reference_jeu.controler(dossier)
+    if violations:
+        print("REFUS : le jeu d'essai de %s ne passe pas son contrôle (%d violation(s), dont : %s) ; rien n'est écrit. "
+              "--generer ne change pas les tables (ADR 0006). Si la modification est voulue, refaire d'abord le "
+              "manifeste : python3 tests/reference_jeu.py manifeste --dossier %s (session principale, après visa)." % (
+                  dossier, len(violations), violations[0], dossier), file=sys.stderr)
+        return 2
     modifies = arbre_modifie()
     sha = args.sha or sha_du_depot()
     if sha is None:

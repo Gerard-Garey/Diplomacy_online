@@ -110,9 +110,14 @@ def depot_git(racine):
 
     Dépôt temporaire, sans rapport avec celui du projet : la configuration et les
     variables GIT_* de l'appelant sont écartées, pour que le test dise la même chose partout.
+    Son fichier d'ignorés global aussi (git/ignore sous XDG_CONFIG_HOME, à défaut sous
+    ~/.config), que GIT_CONFIG_GLOBAL ne neutralise pas : HOME et XDG_CONFIG_HOME
+    désignent un dossier vide, à côté du dépôt.
     """
+    foyer = racine.parent / "foyer_git"
+    foyer.mkdir(exist_ok=True)
     env = {cle: valeur for cle, valeur in os.environ.items() if not cle.startswith("GIT_")}
-    env.update(GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1")
+    env.update(GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1", HOME=str(foyer), XDG_CONFIG_HOME=str(foyer / "config"))
 
     def git(*arguments):
         return subprocess.run(
@@ -1070,6 +1075,27 @@ class CoucheD(AvecJeu):
         git("mv", "tests/reference/manifeste.json", "tests/manifeste.json")
         self.assertEqual(self.arbre(git), ["AM tests/manifeste.json"])
 
+    def test_un_fichier_non_suivi_est_vu_malgre_le_reglage_de_l_appelant(self):
+        """status.showUntrackedFiles=no, dans la configuration de l'appelant, ne cache pas un harnais non suivi."""
+        git = depot_git(self.racine)
+        reglages = self.racine.parent / "gitconfig"
+        reglages.write_text("[status]\n\tshowUntrackedFiles = no\n", encoding="utf-8")
+        git.env["GIT_CONFIG_GLOBAL"] = str(reglages)
+        (self.racine / "tests" / "nouveau.py").write_text("", encoding="utf-8")
+        self.assertEqual(git("status", "--porcelain"), "")  # le réglage est bien lu : git, sans l'argument, ne dit rien
+        self.assertEqual(self.arbre(git), ["?? tests/nouveau.py"])
+
+    def test_le_depot_d_essai_ignore_les_ignores_de_l_appelant(self):
+        """Un git/ignore global (XDG_CONFIG_HOME ou ~/.config) qui nomme un fichier du test ne le cache pas."""
+        foyer = self.racine.parent / "appelant"
+        for dossier in (foyer / "xdg" / "git", foyer / ".config" / "git"):
+            dossier.mkdir(parents=True)
+            (dossier / "ignore").write_text("nouveau.py\n", encoding="utf-8")
+        with mock.patch.dict(os.environ, {"HOME": str(foyer), "XDG_CONFIG_HOME": str(foyer / "xdg")}):
+            git = depot_git(self.racine)
+        (self.racine / "tests" / "nouveau.py").write_text("", encoding="utf-8")
+        self.assertEqual(self.arbre(git), ["?? tests/nouveau.py"])
+
     def test_les_textes_de_d4(self):
         code, sortie = self.lancer("--textes", "S1901M", "france")
         self.assertEqual(code, 0)
@@ -1117,6 +1143,45 @@ class Sequence(AvecJeu):
         code, sortie = self.generer()
         self.assertEqual(code, 0, sortie)
         self.assertIn("Attendus écrasés : aucune grandeur ne change.", sortie)
+
+    def etat_du_jeu(self):
+        return {f: (self.dossier / f).read_bytes() for f in reference_jeu.fichiers_du_jeu(self.dossier)}
+
+    def test_generer_accepte_un_jeu_fraichement_reduit(self):
+        """Cas (i) : sans attendus, le manifeste ne liste que l'historique et les tables ; le contrôle du jeu passe."""
+        self.assertFalse((self.dossier / "attendus").exists())
+        self.assertEqual(reference_jeu.controler(self.dossier), [])
+        code, sortie = self.generer()
+        self.assertEqual(code, 0, sortie)
+        self.assertNotIn("REFUS", sortie)
+
+    def test_generer_accepte_une_seconde_generation(self):
+        """Cas (ii) : le manifeste porte l'empreinte des attendus, et --generer l'a refait : il leur est fidèle."""
+        self.assertEqual(self.generer()[0], 0)
+        manifeste = json.loads((self.dossier / "manifeste.json").read_text(encoding="utf-8"))
+        self.assertTrue([f for f in manifeste["fichiers"] if f["chemin"].startswith("attendus/")])
+        avant = self.etat_du_jeu()
+        code, sortie = self.generer()
+        self.assertEqual(code, 0, sortie)
+        self.assertEqual(self.etat_du_jeu(), avant)
+
+    def test_generer_refuse_une_table_modifiee_a_la_main(self):
+        """Cas (iii) : après génération, une table retouchée n'est pas entérinée par de nouvelles empreintes."""
+        self.assertEqual(self.generer()[0], 0)
+        self.modifier("tables/S1901M.json", lambda d: d["tables"]["FRANCE"]["plans"][0].update(value=0.123456), manifeste=False)
+        avant = self.etat_du_jeu()
+        for options in ((), ("--arbre-modifie",)):
+            code, sortie = self.generer(*options)
+            self.assertEqual(code, 2, sortie)
+            self.assertIn("REFUS : le jeu d'essai", sortie)
+            self.assertIn("tables/S1901M.json ne correspond plus au manifeste", sortie)
+            self.assertIn("reference_jeu.py manifeste", sortie)
+            self.assertEqual(self.etat_du_jeu(), avant)
+        self.assertTrue(reference_jeu.controler(self.dossier))
+        # La modification voulue passe par la commande nommée : elle se voit alors dans le diff du manifeste.
+        self.assertEqual(reference_jeu.main(["manifeste", "--dossier", str(self.dossier)]), 0)
+        code, sortie = self.generer()
+        self.assertEqual(code, 0, sortie)
 
     def test_un_harnais_modifie_fait_toujours_refuser(self):
         for relatif, ligne in (("tests/harnais.py", " M tests/harnais.py"), ("cicero/overlay/bot.py", " M cicero/overlay/bot.py"),
