@@ -37,6 +37,10 @@ from pathlib import Path
 from typing import Dict, Tuple
 from unittest import mock
 
+# Avant tout chargement : ni __pycache__ dans tests/, ni .pyc sous cicero/overlay, que
+# outils/exporter_patchs.sh --verifier et install.sh prendraient pour des fichiers d'overlay (#27).
+sys.dont_write_bytecode = True
+
 import faux_site
 
 RACINE = Path(__file__).resolve().parents[1]

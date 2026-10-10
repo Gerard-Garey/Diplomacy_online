@@ -4,8 +4,10 @@
 # (cicero/overlay/essais/, à lancer dans le conteneur cicero-dialogue).
 set -uo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
-# Les tests lancés plus bas ne doivent pas écrire de __pycache__ : un .pyc contient le
-# chemin absolu du dépôt, que le contrôle « chemin personnel » retrouverait.
+# Rien ici ne doit écrire de __pycache__ : un .pyc contient le chemin absolu du dépôt, que
+# le contrôle « chemin personnel » retrouverait. Les scripts de tests/ s'en gardent
+# eux-mêmes (sys.dont_write_bytecode) et sont lancés plus bas sans cette variable, pour
+# que le contrôle du bytecode porte sur eux (#27).
 export PYTHONDONTWRITEBYTECODE=1
 statut=0
 ko() { echo "ÉCHEC : $*"; statut=1; }
@@ -27,13 +29,24 @@ done < <(find cicero/overlay webdiplomacy/overlay tests -name '*.py')
 # Un défaut connu y est un échec attendu (« expected failures ») ; un succès inattendu
 # fait sortir unittest en erreur : la marque est alors à retirer du test.
 for t in tests/test_etat_dialogue.py tests/test_promesses.py; do
-  if sortie=$(python3 "$t" 2>&1); then
+  if sortie=$(env -u PYTHONDONTWRITEBYTECODE python3 "$t" 2>&1); then
     echo "$sortie" | tail -n 3
   else
     echo "$sortie"
     ko "$t (voir ci-dessus)"
   fi
 done
+# Lancé seul, comme le mainteneur le lance pour la colonne « avant » d'un tableau.
+if ! sortie=$(env -u PYTHONDONTWRITEBYTECODE python3 tests/mesure_promesses.py 2>&1); then
+  echo "$sortie"
+  ko "tests/mesure_promesses.py ne s'exécute pas (voir ci-dessus)"
+fi
+
+# Un .pyc laissé dans un overlay par un script lancé à la main (python3 tests/..., sans la
+# variable ci-dessus) y est un fichier local : aucun ne doit s'y trouver après les tests (#27).
+if find cicero/overlay webdiplomacy/overlay \( -name __pycache__ -o -name '*.pyc' \) -print | grep . ; then
+  ko "bytecode Python dans un overlay (voir ci-dessus) : le supprimer ; s'il revient, un script de tests/ ne pose pas sys.dont_write_bytecode avant de charger l'overlay"
+fi
 
 for p in cicero/patches/*.patch webdiplomacy/patches/*.patch; do
   [ -s "$p" ] || ko "patch vide : $p"

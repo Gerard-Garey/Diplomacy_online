@@ -16,6 +16,7 @@ import time
 import types
 from pathlib import Path
 
+sys.dont_write_bytecode = True  # charger() lit cicero/overlay : pas de .pyc à côté des sources (#27)
 ICI = Path(__file__).resolve().parent
 if Path("/opt/cicero/fairdiplomacy").is_dir() and "/opt/cicero" not in sys.path:
     sys.path.insert(0, "/opt/cicero")  # l'image : les scripts sont lancés depuis /mesure

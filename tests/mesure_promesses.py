@@ -10,8 +10,13 @@ une fois : ni pile, ni Claude, ni GPU.
 Usage : python3 tests/mesure_promesses.py
 """
 import logging
+import sys
 import tempfile
 from unittest import mock
+
+# Avant tout chargement : ni __pycache__ dans tests/, ni .pyc sous cicero/overlay, que
+# outils/exporter_patchs.sh --verifier et install.sh prendraient pour des fichiers d'overlay (#27).
+sys.dont_write_bytecode = True
 
 import banc_promesses as banc
 import faux_site

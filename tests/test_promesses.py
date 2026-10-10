@@ -27,6 +27,10 @@ import unittest
 
 from unittest import mock
 
+# Avant tout chargement : ni __pycache__ dans tests/, ni .pyc sous cicero/overlay, que
+# outils/exporter_patchs.sh --verifier et install.sh prendraient pour des fichiers d'overlay (#27).
+sys.dont_write_bytecode = True
+
 import banc_promesses as banc
 import faux_site
 import mesure_promesses
