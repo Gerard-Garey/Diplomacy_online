@@ -48,7 +48,7 @@ Description complète : `docs/doc/architecture.md`. Invariants que tout agent re
 - **Le moteur décide, le dialogue informe.** Le sens de circulation est *plan → dialogue* (`current_plans.json`). Le retour *dialogue → moteur* ne passe que par le champ `sincere`, filtré par `legal_commitments` et restreint par la déclaration de rupture `betray` (qui ne quitte pas le bot de dialogue), et n'agit que sur la probabilité d'une action, jamais sur sa valeur : aucun mécanisme ne doit pouvoir faire jouer un bot contre son intérêt.
 - **Cloisonnement des puissances.** Un bot ne lit que ses propres conversations et n'utilise que ses propres engagements. Toute donnée partagée entre conteneurs est indexée par partie, phase et puissance.
 - **Fidélité à Cicero.** On étend ses mécanismes (`extra_plausible_orders`, ancrage du dialogue sur le plan) plutôt que d'en inventer de parallèles ; un écart à ce principe passe par un ADR.
-- **Rien de local dans le dépôt** : ni chemin personnel, ni jeton, ni base de données, ni état de partie. `tests/verifier.sh` le contrôle.
+- **Rien de local dans le dépôt** : ni chemin personnel, ni jeton, ni base de données, ni état d'exécution d'une instance (journaux, fichiers d'état, messages, parties). Seule exception : le jeu d'essai figé de `tests/reference/` (partie 100 % bots, historique des ordres et tables réduites, manifeste ; ADR 0006). `tests/verifier.sh` contrôle l'interdiction et l'exception.
 - **L'état écrit sur disque l'est aussitôt.** Les conteneurs sont reconstruits souvent : toute mutation d'état se persiste à l'étape même, pas en fin de cycle.
 
 ## Changements de résultats et reproductibilité
