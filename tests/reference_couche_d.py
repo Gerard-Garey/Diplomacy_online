@@ -24,7 +24,9 @@ empreintes ne sont pas refaites par-dessus. Le refus dit comment en sortir, selo
 une table ou l'historique qui ne correspondent plus au manifeste, et rien d'autre --
 `reference_jeu.py manifeste` si la modification est voulue, puis --generer ; toute autre
 violation (attendus/ retouché, par exemple) -- supprimer attendus/, `reference_jeu.py
-manifeste`, puis --generer. La batterie, elle, n'appelle jamais git ici.
+manifeste`, puis --generer ; ce second chemin ne lève que ce que portent attendus/ ou le
+manifeste (un fichier en trop ou manquant, le contenu d'une table ou de l'historique se
+corrigent d'abord dans le dossier). La batterie, elle, n'appelle jamais git ici.
 
 Tant que le jeu d'essai est absent ou vide, rien n'est comparé : la commande le dit
 et rend 0. Sinon, pour chaque table (phase, puissance) :
@@ -909,8 +911,10 @@ def refus_du_jeu(dossier, violations):
 
     Deux cas. Une table ou l'historique ne correspondent plus au manifeste, et rien d'autre : la
     commande `manifeste` suffit, si la modification est voulue. Toute autre violation (attendus/
-    retouché, fichier en trop...) : les attendus sont à refaire, en trois temps. Ce chemin ne lève
-    pas une violation portée par le contenu d'une table ou de l'historique : le message le dit.
+    retouché, clé non admise dans attendus/...) : les attendus sont à refaire, en trois temps. Ce
+    chemin ne lève que les violations portées par attendus/ ou par le manifeste ; un fichier en
+    trop ou manquant, ou le contenu d'une table ou de l'historique, se corrige d'abord dans le
+    dossier : le message le dit.
     """
     autres = [v for v in violations if not _table_ou_historique_retouche(v)]
     tete = "REFUS : le jeu d'essai de %s ne passe pas son contrôle (%d violation(s), dont : %s) ; rien n'est écrit. " % (
@@ -924,8 +928,9 @@ def refus_du_jeu(dossier, violations):
     return tete + (
         "La violation n'est pas seulement celle d'une table ou de l'historique retouchés : refaire le manifeste ne "
         "suffit pas. Pour refaire les attendus, en trois temps (session principale, après visa) : 1) supprimer %s ; "
-        "2) %s ; 3) relancer --generer. Une violation portée par le contenu d'une table ou de l'historique se corrige "
-        "d'abord dans le fichier : ce chemin ne la lève pas." % (dossier / reference_jeu.ATTENDUS, manifeste))
+        "2) %s ; 3) relancer --generer. Ce chemin ne lève que les violations portées par %s/ ou par le manifeste ; un "
+        "fichier en trop ou manquant, ou le contenu d'une table ou de l'historique, se corrige d'abord dans le dossier."
+        % (dossier / reference_jeu.ATTENDUS, manifeste, reference_jeu.ATTENDUS))
 
 
 def commande_generer(jeu, args):

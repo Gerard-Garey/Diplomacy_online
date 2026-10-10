@@ -1366,6 +1366,37 @@ class Sequence(AvecJeu):
         self.assertIn("clé hors liste blanche : 'bavardage'", sortie)
         self.assertIn("1) supprimer", sortie)
 
+    def trois_temps(self):
+        """Le chemin du second message, exécuté ; rend (code de --generer, violations restantes)."""
+        if (self.dossier / "attendus").exists():
+            shutil.rmtree(str(self.dossier / "attendus"))
+        self.assertEqual(reference_jeu.main(["manifeste", "--dossier", str(self.dossier)]), 0)
+        return self.generer()[0], reference_jeu.controler(self.dossier)
+
+    def test_les_trois_temps_ne_levent_pas_un_fichier_en_trop_ni_manquant(self):
+        """La réserve du second message, mesurée : fichier hors format à la racine du jeu, puis table supprimée."""
+        self.assertEqual(self.generer()[0], 0)
+        (self.dossier / "notes.txt").write_text("a\n", encoding="utf-8")
+        code, sortie = self.generer()
+        self.assertEqual(code, 2, sortie)
+        self.assertIn("notes.txt", sortie)
+        self.assertIn("un fichier en trop ou manquant, ou le contenu d'une table ou de l'historique, se corrige d'abord "
+                      "dans le dossier", sortie)
+        code, violations = self.trois_temps()
+        self.assertEqual(code, 2)
+        self.assertTrue(any("notes.txt" in v and "pas du format" in v for v in violations), violations)
+        # Corrigé dans le dossier, le même chemin aboutit.
+        (self.dossier / "notes.txt").unlink()
+        self.assertEqual(self.trois_temps(), (0, []))
+        # Une table supprimée : le manifeste refait nomme encore sa phase, et rien ne la recrée.
+        (self.dossier / "tables" / "F1901M.json").unlink()
+        code, sortie = self.generer()
+        self.assertEqual(code, 2, sortie)
+        self.assertIn("1) supprimer", sortie)
+        code, violations = self.trois_temps()
+        self.assertEqual(code, 2)
+        self.assertEqual(violations, ["manifeste.json : phases : ne sont pas exactement celles des fichiers de tables/ (S1901M)"])
+
     def test_les_deux_messages_du_refus(self):
         """Une table ou l'historique retouchés seuls : la commande `manifeste` ; tout autre cas : les trois temps."""
         perime = "manifeste.json : fichiers : %s ne correspond plus au manifeste (taille ou empreinte) : refaire le manifeste"
@@ -1384,14 +1415,14 @@ class Sequence(AvecJeu):
             ([autre], autre),
             (["manifeste.json : fichiers : notes.txt est dans le dossier mais pas dans le manifeste"],
              "manifeste.json : fichiers : notes.txt est dans le dossier mais pas dans le manifeste"),
-            (["tables/S1901M.json : (racine) : JSON illisible"], "tables/S1901M.json : (racine) : JSON illisible"),
-            (["reference : manifeste absent (manifeste.json)"], "reference : manifeste absent (manifeste.json)"),
         ):
             message = couche_d.refus_du_jeu(d, violations)
             self.assertIn("(%d violation(s), dont : %s)" % (len(violations), citee), message)
             self.assertIn("1) supprimer D/attendus ; 2) python3 tests/reference_jeu.py manifeste --dossier D ; "
                           "3) relancer --generer.", message)
-            self.assertIn("se corrige d'abord dans le fichier", message)
+            self.assertIn("Ce chemin ne lève que les violations portées par attendus/ ou par le manifeste ; un fichier en "
+                          "trop ou manquant, ou le contenu d'une table ou de l'historique, se corrige d'abord dans le "
+                          "dossier.", message)
             self.assertNotIn("Si la modification est voulue", message)
         # La phrase que le message relit est celle que le contrôle écrit.
         self.modifier("tables/S1901M.json", lambda d: d["tables"]["FRANCE"]["plans"][0].update(value=0.123456), manifeste=False)
