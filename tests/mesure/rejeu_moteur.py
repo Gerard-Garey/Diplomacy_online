@@ -5,6 +5,7 @@ conteneur cicero-orders étant arrêté (GPU de 8 Go) :
 
     python /mesure/rejeu_moteur.py GAMEID PHASE PUISSANCE N --engagements <fichier.json|auto:prefere|auto:alternative>
     python /mesure/rejeu_moteur.py GAMEID PHASE PUISSANCE N --incremental
+    python /mesure/rejeu_moteur.py GAMEID PHASE PUISSANCE N --historique <historique.json> --score sos --engagements aucun
 
 Par tirage : lecture seule du statut de la partie, rolled_back_to_phase_start,
 recherche A sans engagement, puis recherche B avec les engagements (fichier
@@ -12,8 +13,25 @@ PSEUDO_COMMITMENTS_FILE hors du volume de production), déclenchée par un messa
 ajouté à la copie en mémoire du jeu (rien n'est envoyé au site). --incremental :
 la promesse est un ordre déjà tenu par l'action de tête de A, les messages
 viennent d'un tiers et sont adressés à tous, et une recherche C suit B.
+--engagements aucun : la recherche A seule.
 
-Relevés : une ligne JSON par recherche dans <MESURE_DIR>/resultats/.
+Engagement figé par lancement : avec auto:prefere ou auto:alternative, l'engagement
+est choisi une fois, sur la recherche A du tirage 0, et gardé pour tous les tirages
+du lancement (les recherches B d'une position se comparent alors à engagement
+égal). Chaque ligne de relevé le porte, avec sa raison (`engagement_fige`,
+`raison_de_l_engagement`, `engagement_choisi_au_tirage`) ; la seule ligne écrite
+avant le choix, la recherche A du tirage 0, les porte nuls. Le mode --incremental
+garde son choix par tirage : sa promesse doit être tenue par l'action rendue.
+--etiquette X : le nom du fichier de relevés porte X après le mode (seconde passe
+d'une position dans un fichier distinct, que la réduction ne prend pas).
+
+--historique (référence de non-régression, #31) : la position est reconstruite
+depuis l'historique des ordres seul (capture_reference.py), sans aucun accès au
+site ; --score et --minutes-de-phase redonnent ce que le site règle d'ordinaire.
+
+Relevés : une ligne JSON par recherche dans <MESURE_DIR>/resultats/, avec, sous
+`arguments_export`, les arguments bruts de l'appel à export_plans (l'appel est
+doublé, le moteur n'est pas modifié : capture_reference.doubler_export).
 --dry-run : aucun site, aucun moteur ; une doublure du moteur (table fabriquée,
 vraies fonctions boosted_policy et export_plans du dépôt) fait tourner toute la
 chaîne de relevés et de contrôles. --doublure-compose y simule le défaut du
@@ -28,12 +46,14 @@ import subprocess
 import sys
 import threading
 import time
+import types
 from pathlib import Path
 
 # Avant tout chargement : commun.charger lit des fichiers de cicero/overlay, où un .pyc
 # passerait pour un fichier d'overlay (outils/exporter_patchs.sh --verifier, install.sh ; #27).
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import capture_reference  # noqa: E402
 import commun  # noqa: E402
 
 AGENT_CFG = "/opt/cicero/conf/common/agents/cicero_no_dialogue.prototxt"
@@ -101,14 +121,16 @@ class SondeGPU(threading.Thread):
 # ---------------------------------------------------------------------------
 
 class MoteurReel:
-    def __init__(self, game_id, phase, puissance):
+    def __init__(self, game_id, phase, puissance, site=True):
         import heyhi
-        from fairdiplomacy.agents import build_agent_from_cfg
+        from fairdiplomacy.agents import bqre1p_agent, build_agent_from_cfg
         from fairdiplomacy.utils import plan_export, pseudo_commitments
 
         self.game_id, self.phase, self.puissance = game_id, phase, puissance
         self.pc, self.pe = pseudo_commitments, plan_export
-        self.ctx = commun.trouver_contexte(game_id, puissance)
+        # Le module où l'agent appelle export_plans : c'est là que l'appel se double.
+        self.module_agent = bqre1p_agent
+        self.ctx = commun.trouver_contexte(game_id, puissance) if site else None
         self.agent = build_agent_from_cfg(heyhi.load_config(AGENT_CFG))
         self.game, self.player, self.horloge = None, None, int(time.time())
 
@@ -153,30 +175,92 @@ class MoteurReel:
         return list(action), politique
 
 
-class MoteurDoublure:
-    """Essai à sec : table fabriquée, vraies fonctions du dépôt (boosted_policy, export_plans)."""
+class MoteurHistorique(MoteurReel):
+    """Position reconstruite depuis l'historique des ordres seul : aucun accès au site (#31)."""
 
-    # Actions et valeurs : plans de ITALY, partie 3, S1902M (current_plans.json de production).
-    # Probabilités et lambda : FABRIQUÉS pour l'essai à sec.
-    TABLE = [
-        (("A TUN H", "F ION - AEG", "F NAP - ION", "A VEN H"), 0.17583, 0.30),
-        (("A TUN H", "F ION - AEG", "F NAP - ION", "A VEN S A TRI"), 0.17103, 0.25),
-        (("A TUN H", "F ION - EAS", "F NAP - ION", "A VEN H"), 0.13124, 0.15),
-        (("A TUN H", "F ION - EAS", "F NAP - ION", "A VEN S A TRI"), 0.13158, 0.12),
-        (("A TUN H", "F ION - AEG", "F NAP - ION", "A VEN - PIE"), 0.15881, 0.10),
-        (("A TUN H", "F ION - EAS", "F NAP - ION", "A VEN - PIE"), 0.12204, 0.08),
-    ]
+    def __init__(self, game_id, phase, puissance, historique, score=None, minutes_de_phase=None):
+        MoteurReel.__init__(self, game_id, phase, puissance, site=False)
+        self.historique, self.score, self.minutes_de_phase = historique, score, minutes_de_phase
+
+    def nouvelle_partie(self):
+        from fairdiplomacy import pydipcc
+        from fairdiplomacy.agents.player import Player
+
+        self.game, rejouees = capture_reference.partie_depuis_historique(
+            pydipcc.Game, self.historique, self.phase, self.score, self.minutes_de_phase
+        )
+        self.game.set_metadata("game_id", str(self.game_id))
+        self.player = Player(self.agent, self.puissance)
+        return {
+            "source": "historique", "phases_rejouees": rejouees, "phase_courante": self.game.current_short_phase,
+            "score": self.score, "minutes_de_phase": self.minutes_de_phase,
+            "messages_dans_la_copie": len(self.game.messages),
+        }
+
+
+# Table de l'essai à sec quand le jeu d'essai figé n'offre pas la sienne : FABRIQUÉE de
+# bout en bout (actions, valeurs, probabilités), sur les unités du banc de tests.
+TABLE_FABRIQUEE = [
+    (("A PAR - BUR", "A MAR - SPA", "F BRE - MAO", "A PIC H"), 0.18, 0.30),
+    (("A PAR - BUR", "A MAR - SPA", "F BRE - MAO", "A PIC S A PAR - BUR"), 0.17, 0.25),
+    (("A PAR - BUR", "A MAR - PIE", "F BRE - MAO", "A PIC H"), 0.13, 0.15),
+    (("A PAR - BUR", "A MAR - PIE", "F BRE - MAO", "A PIC S A PAR - BUR"), 0.135, 0.12),
+    (("A PAR - BUR", "A MAR - SPA", "F BRE - MAO", "A PIC - BEL"), 0.16, 0.10),
+    (("A PAR - BUR", "A MAR - PIE", "F BRE - MAO", "A PIC - BEL"), 0.12, 0.08),
+]
+# Probabilités FABRIQUÉES pour l'essai à sec, données aux actions dans l'ordre de la table.
+PROBABILITES_FABRIQUEES = (0.30, 0.25, 0.15, 0.12, 0.10, 0.08)
+REFERENCE = commun.ICI.parent / "reference"  # tests/reference du dépôt ; absent dans un conteneur
+TABLE_DE_REFERENCE = ("S1902M", "ITALY")
+
+
+def table_de_la_doublure(dossier=None):
+    """(table de l'essai à sec, sa provenance).
+
+    Les plans (actions et valeurs) de la table S1902M / ITALY du jeu
+    d'essai figé (tests/reference/, ADR 0006, décision 5) quand il est là ; les
+    probabilités restent fabriquées. Sinon -- référence pas encore créée, ou
+    script copié dans un conteneur -- une table fabriquée de bout en bout.
+    """
+    phase, puissance = TABLE_DE_REFERENCE
+    fichier = Path(REFERENCE if dossier is None else dossier) / "tables" / (phase + ".json")
+    try:
+        plans = json.loads(fichier.read_text(encoding="utf-8"))["tables"][puissance]["plans"]
+        table = [(tuple(p["orders"]), p["value"], prob) for p, prob in zip(plans, PROBABILITES_FABRIQUEES)]
+    except (OSError, ValueError, KeyError, TypeError):
+        table = []
+    if len(table) < 2:
+        return list(TABLE_FABRIQUEE), "table fabriquée (pas de table %s %s dans %s)" % (phase, puissance, fichier.parent)
+    total = sum(prob for _a, _v, prob in table)  # moins de six plans : les probabilités fabriquées sont renormalisées
+    table = [(a, v, prob / total) for a, v, prob in table] if len(table) < len(PROBABILITES_FABRIQUEES) else table
+    return table, "actions et valeurs de %s %s (%s), probabilités fabriquées" % (phase, puissance, fichier)
+
+
+class MoteurDoublure:
+    """Essai à sec : table de table_de_la_doublure, vraies fonctions du dépôt (boosted_policy, export_plans)."""
+
+    # Lambda et multiplicateur : FABRIQUÉS pour l'essai à sec.
     LAMBDA, BOOST = 1e-2, 3.0
 
-    def __init__(self, game_id, phase, puissance, pc, pe, compose=False):
+    def __init__(self, game_id, phase, puissance, pc, pe, compose=False, historique=None):
         self.game_id, self.phase, self.puissance = game_id, phase, puissance
         self.pc, self.pe, self.compose = pc, pe, compose
+        self.TABLE, self.provenance = table_de_la_doublure()
+        # Tient lieu du module de l'agent : l'appel à export_plans s'y double comme dans le moteur.
+        self.module_agent = types.SimpleNamespace(export_plans=pe.export_plans)
+        self.historique = historique
         self.politique, self.messages = None, 0
 
     def nouvelle_partie(self):
         self.politique = {a: p for a, _v, p in self.TABLE}
         self.messages = 0
-        return {"doublure": True}
+        releve = {"doublure": True, "table": self.provenance}
+        if self.historique is not None:  # le rejeu de l'historique, sur une doublure de pydipcc.Game
+            _game, rejouees = capture_reference.partie_depuis_historique(
+                capture_reference.doublure_de_partie(self.historique), self.historique, self.phase
+            )
+            releve.update(source="historique", phases_rejouees=rejouees)
+        return releve
 
     def promesses_effectives(self, ordres):
         return list(ordres)
@@ -194,7 +278,7 @@ class MoteurDoublure:
             ((a, valeurs[a], bp[a], commun.score(valeurs[a], bp[a], self.LAMBDA)) for a in bp),
             key=lambda ligne: -ligne[3],
         )
-        self.pe.export_plans(
+        self.module_agent.export_plans(
             str(self.game_id), self.phase, self.puissance, action_values,
             prior_policy=avant, regularize_lambda=self.LAMBDA,
             boost=self.pe.exported_boost(True, self.BOOST), max_prob=self.pc.MAX_COMMITMENT_PROB,
@@ -302,10 +386,14 @@ def main():
     p.add_argument("puissance")
     p.add_argument("n_tirages", type=int)
     p.add_argument("--engagements", default="auto:prefere",
-                   help="fichier JSON, ou auto:prefere / auto:alternative (choisis sur la recherche A)")
+                   help="fichier JSON, auto:prefere / auto:alternative (choisis sur la recherche A), ou aucun (recherche A seule)")
     p.add_argument("--incremental", action="store_true",
                    help="contrôle du renfort non composé : promesse tenue par la tête, messages tiers -> ALL, recherches B et C")
     p.add_argument("--expediteur", help="puissance qui envoie le message déclencheur (défaut : la première autre)")
+    p.add_argument("--etiquette", help="ajoutée au nom du fichier de relevés, après le mode (lettres, chiffres, tirets)")
+    p.add_argument("--historique", help="historique des ordres (capture_reference.py) : position reconstruite sans le site")
+    p.add_argument("--score", choices=sorted(capture_reference.SCORES), help="avec --historique : système de score de la partie")
+    p.add_argument("--minutes-de-phase", type=int, help="avec --historique : durée d'une phase de la partie")
     p.add_argument("--dry-run", action="store_true", help="doublure du moteur, aucun accès au site ni au GPU")
     p.add_argument("--doublure-compose", action="store_true", help="avec --dry-run : simule le renfort composé")
     args = p.parse_args()
@@ -315,6 +403,7 @@ def main():
     expediteur = (args.expediteur or [x for x in commun.POWERS if x != args.puissance][0]).upper()
 
     sec = args.dry_run
+    historique = json.loads(Path(args.historique).read_text()) if args.historique else None
     resultats = commun.MESURE_DIR / ("resultats_sec" if sec else "resultats")
     travail = commun.MESURE_DIR / ("travail_sec" if sec else "travail")
     travail.mkdir(parents=True, exist_ok=True)
@@ -335,12 +424,22 @@ def main():
         utils = commun.ICI.parents[1] / "cicero" / "overlay" / "fairdiplomacy" / "utils"
         pc = commun.charger("mesure_pseudo_commitments", utils / "pseudo_commitments.py")
         pe = commun.charger("mesure_plan_export", utils / "plan_export.py")
-        moteur = MoteurDoublure(args.game_id, args.phase, args.puissance, pc, pe, compose=args.doublure_compose)
+        moteur = MoteurDoublure(
+            args.game_id, args.phase, args.puissance, pc, pe, compose=args.doublure_compose, historique=historique,
+        )
     else:
         if Path("/opt/cicero").is_dir():
             sys.path.insert(0, "/opt/cicero")
-        moteur = MoteurReel(args.game_id, args.phase, args.puissance)
+        if historique is not None:
+            moteur = MoteurHistorique(
+                args.game_id, args.phase, args.puissance, historique, args.score, args.minutes_de_phase
+            )
+        else:
+            moteur = MoteurReel(args.game_id, args.phase, args.puissance)
         pc, pe = moteur.pc, moteur.pe
+    # Arguments bruts d'export_plans : l'appel de l'agent est doublé, rien d'autre n'est touché.
+    appels_export = []
+    capture_reference.doubler_export(moteur.module_agent, appels_export)
     # Les modules chargés écrivent-ils bien là où on l'attend ?
     assert Path(str(pc.COMMITMENTS_FILE)) == f_engagements, (pc.COMMITMENTS_FILE, f_engagements)
     assert Path(str(pe.PLANS_FILE)) == f_plans, (pe.PLANS_FILE, f_plans)
@@ -349,7 +448,12 @@ def main():
         logging.getLogger().addHandler(journal)
 
     mode = "incremental" if args.incremental else "engagements"
-    sortie = resultats / ("m1_%s_%s_%s_%s_%s.jsonl" % (args.game_id, args.phase, args.puissance, mode, commun.horodatage()))
+    if args.etiquette and not args.etiquette.replace("-", "").isalnum():
+        raise SystemExit("--etiquette : lettres, chiffres et tirets seulement")
+    nom_du_mode = mode + ("-" + args.etiquette if args.etiquette else "")
+    sortie = resultats / ("m1_%s_%s_%s_%s_%s.jsonl" % (args.game_id, args.phase, args.puissance, nom_du_mode, commun.horodatage()))
+    # Engagement figé du lancement (auto:*) : choisi au premier tirage, relevé dans chaque ligne écrite ensuite.
+    fige = {"ordres": None, "raison": None, "tirage": None}
     print("M1 : relevés dans %s" % sortie, flush=True)
     print("     engagements : %s ; plans : %s" % (f_engagements, f_plans), flush=True)
 
@@ -357,6 +461,7 @@ def main():
         if f_plans.exists():
             f_plans.unlink()  # une entrée absente après la recherche se voit
         journal.vider()
+        del appels_export[:]
         sonde = SondeGPU()
         sonde.start()
         debut = time.time()
@@ -365,13 +470,17 @@ def main():
         gpu = sonde.arreter()
         lignes = journal.vider()
         entree = pe.load_plans(str(args.game_id), args.phase, args.puissance)
+        arguments, appels = capture_reference.arguments_de_la_recherche(appels_export, args.phase, args.puissance)
         effectives = moteur.promesses_effectives(promesses) if promesses else []
         releve = {
             "mesure": "M1", "mode": mode, "a_sec": sec, "game_id": args.game_id, "phase": args.phase,
             "puissance": args.puissance, "tirage": tirage, "recherche": nom,
             "engagements_du_fichier": promesses, "engagements_retenus_par_le_moteur": effectives,
+            "engagement_fige": fige["ordres"], "raison_de_l_engagement": fige["raison"],
+            "engagement_choisi_au_tirage": fige["tirage"],
             "message_declencheur": message, "statut": statut, "duree_s": round(duree, 2), "gpu": gpu,
             "action_rendue": action, "politique_avant_renfort": politique, "entree": entree,
+            "arguments_export": arguments, "appels_export": appels,
             "controles": controler(entree, politique, action, effectives, pc, lignes), "journal": lignes,
         }
         commun.ajouter_ligne(sortie, releve)
@@ -392,12 +501,20 @@ def main():
         commun.ecrire_json(f_engagements, {})
         a = rechercher(tirage, "A", [], statut, None)
 
-        if args.incremental or args.engagements.startswith("auto:"):
-            choix = "prefere" if args.incremental else args.engagements.split(":", 1)[1]
-            promesses, raison = commun.choisir_engagements(a["entree"] or {}, choix)
+        if args.engagements == "aucun" and not args.incremental:
+            continue  # la recherche A seule (table sans engagement de la référence, #31)
+        if args.incremental:
+            promesses, raison = commun.choisir_engagements(a["entree"] or {}, "prefere")
             # En mode incrémental la promesse doit être tenue par l'action réellement rendue.
-            if args.incremental and promesses and promesses[0] not in a["action_rendue"]:
+            if promesses and promesses[0] not in a["action_rendue"]:
                 promesses, raison = [a["action_rendue"][0]], "premier ordre de l'action rendue (la tête exportée ne la tient pas)"
+        elif args.engagements.startswith("auto:"):
+            if fige["tirage"] is None:  # choisi une fois, sur la recherche A de ce tirage, gardé ensuite
+                ordres, raison = commun.choisir_engagements(a["entree"] or {}, args.engagements.split(":", 1)[1])
+                fige.update(ordres=list(ordres), raison=raison, tirage=tirage)
+            promesses, raison = list(fige["ordres"]), fige["raison"]
+            if tirage != fige["tirage"]:
+                raison += " ; figé au tirage %d" % fige["tirage"]
         else:
             promesses, raison = lire_engagements(args.engagements, args.game_id, args.phase, args.puissance), "fichier %s" % args.engagements
         print("  tirage %d engagements fabriqués : %s (%s)" % (tirage, promesses, raison), flush=True)
