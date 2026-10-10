@@ -71,7 +71,26 @@ Les ordres sincères suivent ce chemin :
 | Cohérence dans un message | `_reject_contradictions` (`claude_dialogue_bot.py:333`) | Deux ordres distincts pour une même unité dans la liste `sincere` d'un même message : aucun des deux n'est retenu, et la promesse déjà faite pour cette unité, s'il y en a une, reste telle quelle (ligne de journal `[double-deal]`). Le même ordre écrit deux fois compte une fois |
 | Cohérence entre interlocuteurs | `_reject_contradictions` (`claude_dialogue_bot.py`) | Deux promesses contraires sur une même unité : la première tient, sauf si la seconde vaut nettement plus — gain de valeur strictement supérieur à la marge `COMMITMENT_SWITCH_MARGIN`, les deux valeurs étant lues dans l'index `order_values` (§ 3) ; l'autre devient un bluff. **Si la valeur de l'une des deux est inconnue, la première tient** : rien n'établit alors que l'échange vaille une parole rompue (`_order_value`, `claude_dialogue_bot.py:203` et `:349`). Une promesse abandonnée est retirée chez toutes les puissances qui la détenaient, et non chez une seule |
 | Injection | `build_extra_plausible_actions`, appelée depuis `get_orders` | L'action promise est ajoutée aux candidats par le mécanisme d'amont `extra_plausible_orders` : elle ne peut pas être évincée et reçoit une probabilité calculée par le modèle |
-| Renfort | `apply_commitments_to_policy` | Sa probabilité est multipliée, sous plafond. *Écart connu entre ce texte et le code, voir [issue #4](https://github.com/Gerard-Garey/Diplomacy_online/issues/4).* |
+| Renfort | `boosted_policy`, appelée par `apply_commitments_to_policy` (`fairdiplomacy/utils/pseudo_commitments.py:204` et `:344`) | La probabilité de chaque action candidate est multipliée selon la **part des ordres promis qu'elle contient**, sous plafond (formule ci-dessous) |
+
+**Renfort gradué.** Avec n le nombre d'ordres promis (légaux et sans conflit), m(a) le nombre de ceux que contient l'action candidate a, p(a) sa probabilité avant renfort et k le multiplicateur :
+
+```
+p'(a) = max( p(a), min( p(a) · k^(m(a)/n), plafond ) )
+q(a)  = p'(a) / Σ p'
+```
+
+k vaut 3 (`pseudo_commitment_boost`, `cicero_no_dialogue.prototxt`) et le plafond 0,4 (`MAX_COMMITMENT_PROB`, `pseudo_commitments.py:47`). Une action qui tient toutes les promesses reçoit le multiplicateur entier, celle qui en tient la moitié sa racine carrée, celle qui n'en tient aucune n'est pas modifiée avant la renormalisation. Le `max` fait que le plafond ne peut que retenir un renfort : il n'abaisse jamais une action déjà au-dessus de lui. Seules des probabilités sont lues et écrites, jamais une valeur.
+
+Exemple mesuré (`python3 tests/mesure_promesses.py`, lignes « 4a ») : deux ordres promis, trois actions de probabilités 0,5 (aucun ordre tenu), 0,3 (un ordre) et 0,2 (les deux). Avant renormalisation : 0,5 ; 0,3 · √3 = 0,52 ramené à 0,4 ; 0,2 · 3 = 0,6 ramené à 0,4. Après : 0,3846 / 0,3077 / 0,3077, quel que soit l'ordre dans lequel les actions sont rangées. L'égalité des deux dernières vient du plafond.
+
+Trois conséquences à connaître :
+
+- **La probabilité d'une action promise peut baisser.** La renormalisation répartit sur toutes les actions le renfort donné aux autres : avec deux ordres promis, la politique 0,6 (tient les deux) / 0,1 (un seul) / 0,3 (aucun) devient 0,559 / 0,161 / 0,280 (appel direct de `boosted_policy`).
+- **Un ordre promis qu'aucune action candidate ne contient compte dans n** et affaiblit donc le renfort des autres ordres promis. C'est la règle décidée (k élevé à la part des promesses tenues), pas un défaut ; l'injection (ligne précédente du tableau) est ce qui fait entrer l'ordre promis parmi les candidats à la recherche suivante.
+- **Le renfort ne dépend plus de l'ordre de rangement des actions.** Avant cette règle, il visait la première action rencontrée qui contenait chaque ordre promis. Mesure appariée du 2026-10-03, ancien et nouveau renfort appliqués aux mêmes tables réelles (30 recherches d'une partie 100 % bots, phases S1902M, F1902M et S1903M ; 808 jeux d'engagements fabriqués à partir des ordres de ces tables) : l'action de tête change dans 100 cas sur 808 (12,4 %) ; l'ancien résultat dépendait de l'ordre de rangement pour l'action de tête dans 120 cas (14,9 %) et pour les probabilités dans 790 (97,8 %). La comparaison est **approchée** : les valeurs viennent de recherches faites avec le nouveau renfort, et celles qu'aurait données l'ancien n'ont pas été rejouées (`tests/mesure/renfort_apparie.py` ; les relevés, qui contiennent de l'état de partie, ne sont pas versionnés).
+
+Côté moteur, un fichier d'engagements absent, illisible ou de forme inattendue ne fait jamais échouer le calcul des ordres : `load_commitments` (`pseudo_commitments.py:50`) rend alors « aucun engagement », avec un avertissement dans le journal du moteur, et une puissance dont l'entrée n'est pas une liste d'ordres est ignorée sans que les autres le soient.
 
 Ces règles maintiennent un invariant : **au plus un engagement sincère par unité**, tous interlocuteurs confondus (`_reject_contradictions`, `claude_dialogue_bot.py:255`). Le moteur le contrôle une seconde fois à la lecture du fichier : si `pseudo_commitments.json` portait malgré tout deux ordres distincts pour une unité, `resolve_commitment_conflicts` (`fairdiplomacy/utils/pseudo_commitments.py:133`) les écarterait tous les deux et s'en remettrait au plan pour cette unité.
 
