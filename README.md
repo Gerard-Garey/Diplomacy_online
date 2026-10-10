@@ -9,6 +9,7 @@ Ce dépôt ne contient **que ce que le projet ajoute** aux deux logiciels d'amon
 | Élément | État |
 |---|---|
 | Fonctionnement de l'ensemble (ordres, dialogue, promesses) | Éprouvé sur des parties réelles, sur la machine d'origine |
+| Logique des promesses révisée (trahison déclarée, renfort gradué, journal d'envoi) | Mesurée sur bancs et positions rejouées : tests sans pile (`bash tests/verifier.sh`) ; le 2026-10-03, 30 recherches réelles du moteur et un essai d'envoi réel ; le 2026-10-10, 160 appels à Claude sur une seule position. Aucune partie jouée contre un humain n'entre dans ces mesures. Détail et limites : `docs/doc/architecture.md` § 4 |
 | `install.sh` jusqu'à la préparation des amonts (clonage, patchs, configuration, dépendances PHP) | Vérifié par un essai à blanc |
 | Construction de l'image Cicero par le `Dockerfile` de ce dépôt | Validée le 2026-10-03 sur la machine d'origine : build complet depuis les sources en 20 min environ, image de 16,7 Go ; PyTorch y voit le GPU, `pydipcc`, `postman` et les protos s'importent |
 | Démarrage de la pile depuis ce dépôt, sur une base vide | Validé le 2026-10-03 : inscription d'un joueur, partie créée contre six bots, ordres soumis par les six, réponse de Claude à un message, données conservées après `arreter.sh` puis `demarrer.sh` |
@@ -52,6 +53,19 @@ Les bots soumettent leurs ordres en quelques minutes, et le bot de dialogue rel�
 - les journaux du moteur (valeur et probabilité de chaque action, par partie et par puissance) sont dans `amont/cicero/journaux_moteur` ;
 - `bot-service` (bots élémentaires qui tiennent leurs positions) reste dans le dépôt sous le profil `bots`, qu'aucun script ne lance. **Ne pas le démarrer à côté de Cicero** : il validerait des ordres à sa place.
 
+### Partie 100 % bots (essais)
+
+Pour obtenir des positions sans jouer soi-même, une partie dont les sept puissances sont tenues par les bots se crée en ligne de commande, pile démarrée :
+
+```bash
+docker exec -e XDEBUG_MODE=off webdiplomacy-php-fpm-1 \
+  php /application/gamecreateBotsOnly.php <nom>
+```
+
+- `<nom>` : 1 à 50 caractères parmi `A-Z a-z 0-9 _ . -`, le premier alphanumérique ; un nom déjà pris est refusé, ainsi que tout nom commençant par « SB » suivi d'au moins un caractère (`SB_x`, `SBtest`, `Sbires`), que webDiplomacy prendrait pour un bac à sable et dont il repousserait l'échéance à 2033 ;
+- codes de sortie : 0, avec `gameID=<n>` en dernière ligne ; 2, mauvais usage (rien n'est lu en base) ; 1, échec (rien n'est créé) ;
+- le script ne répond qu'en ligne de commande (403 par le site) ; les bots ne s'y parlent pas tant qu'aucun message n'y est posté : aucun code ne l'empêche (#14), et un seul message injecté au nom d'une puissance ouvre un échange entre deux bots, jusqu'à dix réponses par côté, par paire et par phase, chaque réponse appelant Claude ; rien n'arrête la partie d'elle-même avant sa fin, le mainteneur l'arrête par une pause posée en base. Détail : `docs/doc/architecture.md` § 5.
+
 `./install.sh` est relançable : une étape déjà faite est sautée. Options : `--sans-build`, `--sans-modeles`.
 
 | Commande | Effet |
@@ -59,7 +73,7 @@ Les bots soumettent leurs ordres en quelques minutes, et le bot de dialogue rel�
 | `./demarrer.sh` | Démarre webDiplomacy, initialise Redis, démarre les conteneurs `cicero-orders` et `cicero-dialogue` |
 | `./arreter.sh` | Arrête tout ; la base et les parties sont conservées (volume Docker `webdiplomacy_webdiplomacy-db-data`) |
 | `amont/cicero/check_orders.sh <gameID>` | Affiche les ordres que chaque bot a en cache pour la phase en cours |
-| `bash tests/verifier.sh` | Batterie statique (syntaxe, patchs, absence de secret et de chemin personnel) |
+| `bash tests/verifier.sh` | Batterie statique (syntaxe, patchs, absence de secret et de chemin personnel) et tests par appel direct du bot de dialogue et de la logique des promesses ; tourne sans la pile, sans GPU et sans appel à Claude |
 
 ## Organisation du dépôt
 
@@ -70,6 +84,7 @@ Les bots soumettent leurs ordres en quelques minutes, et le bot de dialogue rel�
 | `cicero/overlay/` | Fichiers nouveaux copiés dans l'arbre Cicero : `Dockerfile`, bot de dialogue, configuration de l'agent, export du plan, engagements |
 | `webdiplomacy/patches/`, `webdiplomacy/overlay/` | Idem pour webDiplomacy |
 | `install.sh`, `demarrer.sh`, `arreter.sh` | Installation et exploitation |
+| `tests/` | Batterie statique (`verifier.sh`), banc déterministe de la logique des promesses et de l'état du bot de dialogue, sortie mesurée du banc (`mesure_promesses.py`), scripts des mesures faites sur la pile (`mesure/`) |
 | `outils/exporter_patchs.sh` | Reporte dans le dépôt le travail fait dans `amont/` |
 | `docs/doc/architecture.md` | Fonctionnement d'ensemble ; **à lire en premier** |
 | `docs/exigences.md`, `docs/adr/`, `docs/feuille-de-route.md` | Cahier des charges, décisions, plan |

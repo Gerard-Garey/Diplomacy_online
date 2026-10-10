@@ -28,7 +28,11 @@ plan_section = bot.build_plan_section(15, PHASE, POWER)
 
 # Already promised sincerely to Austria earlier this phase.
 by_recipient = {"AUSTRIA": ["A SIL H", "A PRU S A SIL"]}
-commitments_section = bot.build_commitments_section(by_recipient, "RUSSIA")
+entry = bot.load_plans("15", PHASE, POWER) or {}
+commitments_section = bot.build_commitments_section(
+    by_recipient, "RUSSIA", entry.get("plans"), entry.get("order_values"),
+    candidates=entry.get("candidates"), search=entry.get("search"),
+)
 print("=" * 78)
 print("COMMITMENTS SECTION IN PROMPT")
 print("=" * 78)
@@ -40,24 +44,27 @@ message = ("Allemagne, il faut frapper Varsovie ce tour, c'est le moment. "
 print("RUSSIA:", message)
 print("-" * 78)
 
-reply, sincere = bot.generate_reply(
+reply, sincere, betray = bot.generate_reply(
     POWER, "RUSSIA", board, PHASE, message,
     plan_section=plan_section, trust_section="", commitments_section=commitments_section,
 )
 print("REPLY  :", reply)
 print("SINCERE:", sincere)
+print("BETRAY :", betray)
 print("-" * 78)
 
 prior = {o for v in by_recipient.values() for o in v}
 print("Earlier sincere promise to AUSTRIA:", sorted(prior))
 
 # Exactly what process_bot() applies before anything is recorded.
-accepted, demoted = bot._reject_contradictions(sincere, by_recipient)
+accepted, demoted, superseded, conflicting, ignored = bot._reject_contradictions(
+    sincere, by_recipient, betray=betray
+)
 print("-" * 78)
 print("AFTER ENFORCEMENT")
 print("  recorded as sincere:", accepted)
-for o, e in demoted:
-    print(f"  demoted to bluff  : {o!r} (earlier commitment: {e!r})")
+for o, e, reason, _gain in demoted:
+    print(f"  demoted to bluff  : {o!r} (earlier commitment: {e!r}, {reason})")
 
 leaked = [
     o for o in accepted
