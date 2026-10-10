@@ -50,7 +50,7 @@ Pour expliquer un ordre, les journaux du moteur donnent, pour chaque action cand
 
 `claude_dialogue_bot.py` interroge l'API toutes les 60 s pour chaque bot et répond aux messages reçus en appelant la CLI Claude Code en mode non interactif. Le dialogue est **réactif** : un bot n'ouvre jamais une conversation, et les bots ne se parlent pas entre eux.
 
-Un appel à Claude en échec (réseau, quota) n'est pas pris pour un silence : `_claude_result_text` lève une erreur, le message n'est pas marqué comme traité et le cycle suivant réessaie. Seule une réponse du modèle illisible, sans échec de l'appel, vaut silence.
+Un appel à Claude en échec (réseau, quota) n'est pas pris pour un silence : `_claude_result_text` lève une erreur, le message n'est pas marqué comme traité et le cycle suivant réessaie. Seule une réponse du modèle illisible, sans échec de l'appel, vaut silence. Une réponse dont le champ `reply` est nul ou vide vaut silence elle aussi : le message reçu est marqué comme traité, et rien de ce que la réponse portait par ailleurs n'est retenu — rien n'ayant été dit, rien n'a été promis (`generate_reply`, `claude_dialogue_bot.py:1171-1176`). Ces silences-là sont des décisions, message par message ; le silence de tout le bot sur un fichier d'état illisible est décrit au § 6.
 
 Le vrai Cicero procède dans l'ordre *plan → intentions → messages* : ses messages sont écrits à partir de ce qu'il compte jouer. Le projet reprend ce sens de circulation :
 
@@ -96,6 +96,37 @@ Ces règles maintiennent un invariant : **au plus un engagement sincère par uni
 
 L'action promise est ensuite **évaluée comme les autres** : si sa valeur est nettement inférieure, elle n'est pas jouée. Une promesse ne peut donc pas faire jouer un bot contre son intérêt ; en contrepartie, elle n'est pas garantie.
 
+**Journal d'envoi.** Un engagement n'a de sens que si le message qui le porte est parti. Or le site n'offre aucune clé d'idempotence, et une requête d'envoi peut paraître en échec alors que son message a été stocké. Le bot de dialogue ne renvoie donc jamais une réponse sur la foi d'une erreur : il écrit d'abord ce qu'il s'apprête à envoyer, puis tranche une issue douteuse en relisant les messages de la partie (`process_bot`, `claude_dialogue_bot.py:1225-1253`). L'ordre des écritures est fixe :
+
+1. l'état (`claude_dialogue_state.json`) : les promesses de la phase telles que la réponse les laisse, et une entrée `pending_send` — une par bot et par partie — qui dit ce qui est envoyé (message auquel on répond, destinataire, texte, phase) et de quoi le défaire (ordres ajoutés, promesses retirées avec les puissances qui les détenaient, lignes de journal en attente, nombre d'envois et de relectures) ;
+2. le fichier d'engagements `pseudo_commitments.json` ;
+3. le compteur d'envois, dans l'état ;
+4. la requête d'envoi.
+
+La réponse du site est ensuite classée (`_send_outcome`, `claude_dialogue_bot.py:918`) :
+
+| Issue | Critère | Effet |
+|---|---|---|
+| **Confirmé** | statut 200 et corps JSON dont la liste `messages` contient le message stocké, avec son `timeSent` | message reçu marqué comme traité, échange compté, envoi noté dans `sent_ts`, `pending_send` effacé |
+| **Sourdine** | statut 200 et liste `messages` vide : le destinataire a coupé les messages de cette puissance, rien n'est stocké | engagements de la réponse défaits (fichier d'engagements, puis état) ; message marqué comme traité, échange non compté ; journal `[send-muted]` |
+| **Incertain** | tout le reste : autre statut, corps qui n'est pas du JSON, exception réseau | `pending_send` reste ; rien n'est renvoyé sur-le-champ ; journal `[send-uncertain]` |
+
+Un envoi incertain se résout en tête d'un cycle suivant (`settle_pending_send`, `claude_dialogue_bot.py:1323`). Le bot cherche dans les messages de la partie un message de sa puissance au même destinataire, de même texte (à la représentation près : sauts de ligne, entités HTML, caractères que le site ne stocke pas), pas plus ancien que le message auquel il répondait, et qui ne soit pas déjà un envoi connu de `sent_ts` (`_find_pending_send`, `:896`). Trouvé, l'envoi est confirmé (`[send-confirmed]`). Absent, le bot attend un cycle (`[send-pending]`). À la seconde relecture négative de suite (`SEND_REREADS_BEFORE_RETRY`), de deux choses l'une : si la phase n'a pas changé et que moins de trois envois ont été faits (`MAX_SEND_ATTEMPTS`), il renvoie **le même texte** (`[send-retry]`) ; sinon il abandonne (`[send-failed]`) — engagements défaits, message marqué comme traité, échange non compté. Une réponse écrite dans l'état mais jamais postée (fichier d'engagements impossible à écrire, processus arrêté avant la requête) est postée à la reprise (`[send-resume]`), ou abandonnée si la phase a changé.
+
+Ce que cela garantit et ce que cela coûte :
+
+- **`pending_send` est sur disque avant la requête** : un conteneur arrêté entre la requête et sa confirmation retrouve l'entrée au redémarrage et relit les messages avant de poster quoi que ce soit.
+- **Tant qu'un envoi est incertain, le moteur lit l'engagement** : le fichier d'engagements est écrit avant la requête, et n'est défait qu'à la sourdine ou à l'abandon. Pendant ce temps, ce bot ne traite aucun autre message de cette partie, ni la vérification des promesses, ni leur extraction (`claude_dialogue_bot.py:1410` et `:1646`) : une promesse dont le message n'est pas confirmé n'est ni jugée ni rappelée à Claude.
+- **Les lignes de journal qui annoncent un changement d'engagement** (`sincere commitments -> …`, et les balises `[betrayal]` et `[revision]` d'un remplacement de promesse) sont gardées dans `pending_send` et imprimées **à la confirmation de l'envoi, une fois l'état écrit** (`confirm_send`, `:1254`). Une réponse en sourdine ou abandonnée n'en imprime aucune ; une réponse confirmée à un cycle ultérieur les imprime à ce cycle. Elles sortent **au plus une fois** : si le processus s'arrête entre l'écriture de l'état confirmé et l'impression, elles sont perdues. Un décompte de ces lignes dans les journaux est donc un minorant.
+
+Limites connues, au regard de l'exigence « un message n'est jamais envoyé deux fois » (5.3) :
+
+- le renvoi après deux relectures négatives peut doubler un message que le site stockerait avec plus de deux cycles de retard : rien, côté site, ne borne ce retard, et le choix de deux relectures est une prudence, pas une garantie ;
+- un `pending_send` mal formé (état modifié à la main ou endommagé) ne peut être ni confirmé ni défait : le message auquel il répondait est marqué comme traité si son identifiant se lit encore, rien d'autre n'est défait ; s'il ne se lit plus, le bot l'écrit dans son journal et ce message peut recevoir une seconde réponse (`:1326-1348`) ;
+- le journal d'envoi dépend du fichier d'état : sans lui, les messages déjà traités sont pris pour nouveaux (§ 6).
+
+Mesuré : le banc sans pile (`python3 tests/test_etat_dialogue.py`, 89 tests, où le site est remplacé par la doublure `tests/faux_site.py`) et **un** essai d'envoi réel, le 2026-10-03, sur une partie jetable — un message portant accents, `&`, `<`, saut de ligne et émoji a été classé « confirmé » puis retrouvé exactement une fois par relecture ; le site a stocké l'émoji sous la forme `????`, ce que la clé de comparaison tolère (procédure : `tests/mesure/envoi_reel.md`). Cet essai ne porte ni sur la sourdine, ni sur un envoi réellement incertain, ni sur un stockage tardif : ces cas ne sont éprouvés que contre la doublure. La décision et ses motifs relèvent de l'ADR 0005 (journal d'envoi).
+
 **Registre de confiance.** Les promesses *du joueur* sont extraites de la conversation, filtrées par la même règle de légalité, puis comparées à ses ordres réels une fois la phase résolue. Le bilan (tenues, rompues, exemples) est rappelé à Claude dans les échanges suivants.
 
 Ce que le mécanisme ne couvre pas : les engagements négatifs (« je n'entre pas en Bohême », « je ne construis pas de flotte ») n'ont pas de traduction en ordres et ne sont ni injectés ni suivis.
@@ -120,8 +151,9 @@ Ce que l'installation fixe dans webDiplomacy :
 - **Ports publiés sur `127.0.0.1` seulement** : la pile garde les mots de passe d'amont et n'est pas faite pour être exposée.
 - **Serveur SSE configuré par l'environnement du compose** (`SSE_PORT`, `REDIS_HOST`, `REDIS_PORT`, `SSE_SECRET`) : sans ces variables il écoute sur le port 3000 et cherche Redis en local, alors que nginx l'attend sur `sse:43006`.
 
-Trois points de vigilance :
+Quatre points de vigilance :
 
 - Après plus de 12 min sans traitement, webDiplomacy suspend les parties jusqu'à une remise à l'heure de `LastProcessTime` : c'est le cas sur une base neuve et après tout arrêt prolongé de la pile. `demarrer.sh` rend d'abord aux parties en cours la durée de l'arrêt (leur échéance `processTime` est repoussée d'autant, sans quoi une phase échue pendant l'arrêt serait résolue avant le retour des bots), puis remet `LastProcessTime` à l'heure.
 - Redis n'est pas persistant, et Cicero refuse de démarrer sans la clé `message_review_version` ; `demarrer.sh` la pose à chaque démarrage.
-- L'état du bot de dialogue est chargé une fois en mémoire puis réécrit en entier à chaque étape. Modifier `claude_dialogue_state.json` à la main n'a d'effet que si le conteneur est **redémarré juste après**.
+- L'état du bot de dialogue est lu sur le disque au premier cycle, gardé en mémoire, puis réécrit en entier à chaque étape, par fichier temporaire et `os.replace` : un arrêt en cours d'écriture laisse le fichier précédent intact (`_write_json_file`, `claude_dialogue_bot.py:739`). Modifier `claude_dialogue_state.json` à la main n'a donc d'effet que si le conteneur est **redémarré juste après** ; sinon l'état en mémoire réécrit le fichier.
+- Un fichier d'état ou d'engagements **présent mais illisible** (tronqué, vide, autre chose qu'un objet JSON, inaccessible), ou un fichier d'engagements dont la forme n'est pas `{partie: {phase: {puissance: [ordres]}}}`, n'est ni pris pour un état vide ni écrasé. Le bot de dialogue reste en vie et **muet** : aucun message lu, aucun appel à Claude, aucun envoi, aucune écriture ; il répète une ligne `[silent]` qui nomme le fichier et dit quoi faire, abandonne son état en mémoire et le relit sur le disque au premier cycle où les deux fichiers sont lisibles (`run_cycle`, `:1712` ; `check_state_files`, `:801`). C'est le seul cas où une réparation à la main se fait **sans redémarrage**. Le contrôle est refait avant chaque appel à Claude, après lui et à chaque écriture. Le silence vaut pour tous les bots et toutes les parties, même si une seule partie est en cause. Un fichier **absent** vaut état vide : sans le fichier d'état, les messages déjà traités recevraient une seconde réponse. Le moteur, lui, continue de calculer ses ordres, sans les engagements qu'il ne peut pas lire (§ 4).

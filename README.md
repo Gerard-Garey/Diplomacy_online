@@ -59,7 +59,7 @@ Les bots soumettent leurs ordres en quelques minutes, et le bot de dialogue rel�
 | `./demarrer.sh` | Démarre webDiplomacy, initialise Redis, démarre les conteneurs `cicero-orders` et `cicero-dialogue` |
 | `./arreter.sh` | Arrête tout ; la base et les parties sont conservées (volume Docker `webdiplomacy_webdiplomacy-db-data`) |
 | `amont/cicero/check_orders.sh <gameID>` | Affiche les ordres que chaque bot a en cache pour la phase en cours |
-| `bash tests/verifier.sh` | Batterie statique (syntaxe, patchs, absence de secret et de chemin personnel) |
+| `bash tests/verifier.sh` | Batterie statique (syntaxe, patchs, absence de secret et de chemin personnel) et tests par appel direct du bot de dialogue et de la logique des promesses ; tourne sans la pile, sans GPU et sans appel à Claude |
 
 ## Organisation du dépôt
 
