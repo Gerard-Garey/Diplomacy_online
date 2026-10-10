@@ -12,7 +12,7 @@ Vocabulaire à employer tel quel dans le code, la documentation, les issues et l
 - **Bot de dialogue** : `claude_dialogue_bot.py`, conteneur `cicero-dialogue`.
 - **Phase** : `S1901M`, `F1901M`, `W1901A`… (saison, année, type : `M` mouvement, `R` retraite, `A` ajustement). Le dialogue n'agit sur les ordres qu'en phase de mouvement.
 - **Ordre** : instruction pour une unité, en notation du moteur, avec espaces (`F TRI - ALB`, `A BUD S A SER`). **Action** : l'ensemble des ordres d'une puissance pour une phase.
-- **Ordres plausibles** : les actions candidates (35 au plus) entre lesquelles le moteur choisit ; une action absente de cette liste ne peut pas être jouée.
+- **Ordres plausibles** : les actions candidates (35 au plus, plus l'action injectée qui réalise les promesses du bot) entre lesquelles le moteur choisit ; une action absente de cette liste ne peut pas être jouée.
 - **Plan** : l'action préférée du moteur et ses alternatives, chacune avec son **coût** (valeur perdue par rapport à l'action préférée ; il peut être négatif, les plans étant classés par score et non par valeur ; nul ou négatif, il s'affiche « free » à Claude), exportées dans `current_plans.json`.
 - **Ordre en cache** : l'ordre qu'un bot jouerait si la phase se résolvait maintenant, lu par `check_orders.sh` ; il peut encore changer.
 - **Promesse** : engagement, pris dans un message, de jouer un ordre précis cette phase. **Engagement sincère** : promesse que le bot compte tenir, inscrite dans le champ privé `sincere`. **Bluff** : promesse faite dans le message et absente de `sincere`.
