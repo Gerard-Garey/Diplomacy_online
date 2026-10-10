@@ -15,12 +15,21 @@ claude_dialogue_bot._reject_contradictions compare à COMMITMENT_SWITCH_MARGIN.
 L'unité d'un ordre est celle de _order_loc, et la marge est lue dans le fichier
 du bot : ni l'une ni l'autre ne sont recopiées ici.
 
-Bruit. d = G_T - moyenne de G sur les autres tables du groupe, à deux niveaux :
-  « groupe »      : (partie, phase, puissance, engagements retenus, type de
-                    recherche A / B / C) -- la définition de la spécification ;
-  « engagements » : le même sans le type de recherche. B et C d'un rejeu
-                    incrémental y sont réunis : ce ne sont pas deux tirages
-                    indépendants, la valeur est un minorant.
+Bruit. d = G_T - moyenne de G sur les autres tables du groupe, à quatre niveaux :
+  « recherches_a » : les recherches A sans engagement, seules, groupées par
+                     (partie, phase, puissance) -- le niveau du critère ;
+  « recherches_b » : les recherches B seules, par position et engagements
+                     retenus -- informatif ;
+  « groupe »       : (partie, phase, puissance, engagements retenus, type de
+                     recherche A / B / C), toutes recherches : le cumul de A et
+                     de B -- informatif ;
+  « engagements »  : le même sans le type de recherche. B et C d'un rejeu
+                     incrémental y sont réunis : ce ne sont pas deux tirages
+                     indépendants, la valeur est un minorant -- informatif.
+La recherche B d'un tirage est une mise à jour incrémentale de la recherche A
+du même tirage, sur le même état d'agent : ses observations ne sont pas
+indépendantes de celles de A, et le cumul affiche un effectif supérieur à
+l'information réelle.
 Écarts par paire de tables d'une même position (partie, phase, puissance), pour
 la continuité avec les chiffres cités dans #26 : |G_T1 - G_T2|, classés selon que
 les deux tables ont les mêmes engagements retenus ou non.
@@ -41,13 +50,66 @@ Critère (#26), relatif à la marge : « protège » si aucune acceptation sur b
 « ne protège pas » si 95e centile >= marge au total, ou si plus de 1 % des
 observations sans gain (moyenne des autres tables <= 0) sont acceptées. Le
 verdict n'est rendu que s'il est concluant ; sinon « non concluant », avec ce
-que le critère donnerait en lecture indicative. Le niveau « engagements » n'est
-jamais concluant.
+que le critère donnerait en lecture indicative. Le critère se lit sur le niveau
+« recherches_a » (décision du mainteneur, 2026-10-10) ; les trois autres niveaux
+ne sont jamais concluants. Un rejet de l'indépendance des tirages d'un
+lancement, ou une paire de tables jumelles (voir « Dispersion »), entre dans
+les avertissements : le verdict n'est alors pas concluant.
 
-Reporté, à faire avant le dépouillement de la campagne de recherches (#26) :
-l'instabilité de la règle entière (marge, condition (e), unknown_value, par
-_reject_contradictions) ; l'erreur type de l'effet de l'engagement ; la
-dispersion dans un fichier et entre fichiers.
+Trois compléments. Les deux premiers sont informatifs et n'entrent pas dans le
+verdict ; le troisième n'y entre que par ses mises en garde.
+
+Règle entière. La vraie _reject_contradictions du bot est rejouée sur chaque
+table, avec le vrai engine_head_action (hors image, celui de
+fairdiplomacy/utils/pseudo_commitments.py à côté du bot, à la place de la
+doublure ; un témoin le contrôle au chargement). Scénario : le bot a promis E
+et déclare le rompre pour N, E et N ordres distincts d'une même unité, pris
+parmi les ordres valués d'au moins une table du groupe (niveau « groupe »,
+groupes d'au moins deux tables) ; les autres engagements du groupe restent
+promis. Écarté et compté : E sur l'unité d'un autre engagement du groupe (deux
+paroles sur une unité). Deux classes : « table à jour » si E est un engagement
+du groupe (la table a été calculée sous la promesse), « table antérieure »
+sinon (le bot est en avance sur le moteur). Issue par (scénario, table) :
+« remplace », ou le motif du refus (unknown_value, below_margin, not_played).
+Un couple absent d'une table n'est pas écarté : la règle y rend unknown_value.
+Pour n tables dont k « remplace » : k x (n - k) désaccords sur n x (n - 1) / 2
+paires ; le taux de désaccord est la probabilité que deux recherches de la même
+position décident différemment. Disputé : k >= 1 (G(E, N) = -G(N, E) : la
+moitié au moins des couples est refusée partout). Attribution : un désaccord
+est attribué au motif de la table qui refuse (additif). Instabilité propre de
+chaque condition (non additive), u étant le nombre de tables où l'issue n'est
+pas unknown_value : valeur connue, u x (n - u) sur les paires ; marge, m tables
+connues hors below_margin, m x (u - m) sur u x (u - 1) / 2 ; condition (e),
+e tables « remplace » quand la marge est retirée (margin = -inf), e x (u - e).
+Acceptation sur bruit effective : « remplace » alors que la moyenne de G sur
+les autres tables du groupe qui portent le couple est <= 0, ou qu'aucune autre
+ne le porte.
+
+Effet de la recherche B, apparié. Unité : le tirage (fichier, tirage) où
+coexistent la recherche A sans engagement et la table du groupe.
+delta = G_B - G_A dans le tirage ; effet = moyenne des delta ; erreur type
+s / racine(n), s à n - 1 ; intervalle à 95 % de Student (quantiles recalculés
+par intégration numérique jusqu'à 20 degrés de liberté, 1,96 « approché »
+au-delà) ; pas d'erreur type à moins de 3 tirages. Lecture des seuls couples
+principaux (E engagé, N) : « distinguable du bruit » si l'intervalle exclut 0,
+« négligeable devant la marge » s'il tient dans +/- marge / 2, « non conclusif »
+sinon. Synthèse entre positions (unité : la position), refaite sans le tirage
+sur lequel l'engagement a été choisi. B - A mêle le message déclencheur, la
+mise à jour incrémentale et l'engagement : c'est l'effet de la recherche B
+entière. L'estimateur non apparié (différence de moyennes) reste sous ses clés.
+
+Dispersion dans un fichier et entre fichiers. Sur les couples présents dans
+toutes les tables du groupe, G en entiers (x 1e5) et calculs en fractions.
+Écart type intra : racine du carré moyen dans les fichiers. Groupe réparti sur
+au moins deux fichiers d'au moins deux tables : R = CM inter / CM intra, et
+test par permutation exacte des tables entre fichiers de mêmes tailles (p =
+part des répartitions dont R >= R observé, comparé par produit en croix ;
+unilatéral supérieur ; au plus 20 000 répartitions). p <= 0,05 : « indépendance
+des tirages d'un lancement rejetée » ; sinon « non rejetée », jamais établie.
+Tables jumelles : paires de tables d'un même fichier et d'un même type aux
+order_values identiques ou au search.lambda identique (attendu : aucune).
+Un rejet ou une paire jumelle, quel que soit le type de recherche, est une
+mise en garde en tête du tableau et un avertissement du verdict.
 
 Sorties : un tableau lisible sur la sortie standard, le détail complet en JSON
 (<dossier>/bruit_valeurs.json, ou --sortie ; sans --sortie, refus d'écrire dans
@@ -56,12 +118,14 @@ l'état de partie). Relevé illisible : un message sur la sortie d'erreur et le
 code de retour 2.
 """
 import argparse
+import fractions
 import itertools
 import json
 import math
 import re
 import sys
 from pathlib import Path
+from unittest import mock
 
 # Avant tout chargement : commun.charger lit cicero/overlay, où un .pyc
 # passerait pour un fichier d'overlay (outils/exporter_patchs.sh --verifier, install.sh ; #27).
@@ -86,15 +150,66 @@ NE_PROTEGE_PAS_PART_SUR_BRUIT = 0.01
 MIN_OBSERVATIONS = 100
 MIN_TABLES_PAR_GROUPE = 3
 MIN_POSITIONS = 10
-NIVEAU_DE_LA_SPECIFICATION = "groupe"
+# Le critère se lit sur les recherches A sans engagement (décision du mainteneur, 2026-10-10) :
+# la recherche B d'un tirage est une mise à jour incrémentale de sa recherche A, sur le même
+# état d'agent ; ses observations ne sont pas indépendantes de celles de A.
+NIVEAU_DE_LA_SPECIFICATION = "recherches_a"
+TYPE_AVEC_ENGAGEMENT = "B"
 
 NIVEAUX = (
-    ("groupe", "position, engagements retenus et type de recherche"),
-    ("engagements", "position et engagements retenus, types de recherche réunis"),
+    ("recherches_a", "recherches A sans engagement, seules, par position : le niveau du critère"),
+    ("recherches_b", "recherches B seules, par position et engagements retenus -- informatif"),
+    ("groupe", "position, engagements retenus et type de recherche : cumul de A et de B -- informatif"),
+    ("engagements", "position et engagements retenus, types de recherche réunis -- informatif"),
 )
+HORS_CRITERE = {
+    "recherches_b": "niveau « recherches_b » : la recherche B d'un tirage est une mise à jour incrémentale de sa "
+                    "recherche A, pas une mesure indépendante du bruit ; donné à titre indicatif seulement",
+    "groupe": "niveau « groupe » : cumul des recherches A et B, qui ne sont pas indépendantes (B est une mise à jour "
+              "incrémentale du même tirage) : l'effectif affiché dépasse l'information réelle ; donné à titre "
+              "indicatif seulement",
+    "engagements": "niveau « engagements » : hors de la spécification, donné à titre indicatif seulement",
+}
 CLASSES = ("memes_engagements", "engagements_differents")
 PORTEUSES = ("inchangee", "changee", "inconnue")
 CLES_RECHERCHE = ("game_id", "phase", "puissance", "recherche", "engagements_retenus_par_le_moteur")
+
+# Règle entière : les issues sont lues dans le retour de _reject_contradictions.
+MOTIFS = ("unknown_value", "below_margin", "not_played")
+ISSUES = ("remplace",) + MOTIFS
+CLASSES_REGLE = (
+    ("table_a_jour", "table à jour", "E est un engagement du groupe : la table a été calculée sous la promesse"),
+    ("table_anterieure", "table antérieure", "E n'était pas dans la recherche : le bot est en avance sur le moteur"),
+)
+DESTINATAIRE = "X"  # à qui les promesses rejouées sont faites : un seul, son nom n'entre dans aucune issue
+# Témoin du chargement : deux actions d'une unité, lambda nul (le score est la valeur). Rompre
+# BUR pour PIC gagne 0,10 et PIC est l'action de tête : la règle remplace. Sous la doublure
+# d'engine_head_action, elle rendrait not_played.
+TEMOIN = {
+    "ancien": "A PAR - BUR", "nouveau": "A PAR - PIC",
+    "entree": {
+        "plans": [], "order_values": {"A PAR - PIC": 0.40, "A PAR - BUR": 0.30},
+        "candidates": [{"orders": ["A PAR - PIC"], "value": 0.40, "prob": 0.25},
+                       {"orders": ["A PAR - BUR"], "value": 0.30, "prob": 0.25}],
+        "search": {"lambda": 0.0, "boost": 3.0, "max_prob": 0.4},
+    },
+}
+
+# Effet apparié et dispersion.
+UNITE = 100000  # G est exporté à 5 décimales : en entiers, les sommes de carrés sont exactes
+MIN_TIRAGES_ERREUR_TYPE = 3
+SEUIL_P = 0.05
+MAX_REPARTITIONS = 20000
+CORRELATIONS_DE_PUISSANCE = (0.2, 0.5, 0.8, 0.9)
+LIBELLE_EFFET = "effet de la recherche B (message, mise à jour incrémentale, engagement)"
+# Quantile 0,975 de la loi de Student, par degré de liberté (1 à 20) : recalculé par
+# intégration numérique (student_quantile, que tests/test_bruit_valeurs.py compare à cette
+# table). Au-delà de 20 : celui de la loi normale, rendu avec la mention « approché ».
+STUDENT_975 = (
+    12.706205, 4.302653, 3.182446, 2.776445, 2.570582, 2.446912, 2.364624, 2.306004, 2.262157, 2.228139,
+    2.200985, 2.178813, 2.160369, 2.144787, 2.131450, 2.119905, 2.109816, 2.100922, 2.093024, 2.085963,
+)
+NORMALE_975 = 1.96
 
 
 class ErreurReleve(Exception):
@@ -121,16 +236,83 @@ def trouver_bot(chemin=None):
     )
 
 
-def charger_regle(chemin=None):
-    """(marge, _order_loc, chemin) du bot de dialogue, chargé comme dans les essais à sec."""
+def brancher_tete(module, bot):
+    """Donne au bot le vrai engine_head_action quand il a reçu celui d'une doublure.
+
+    Hors image, fairdiplomacy.utils.pseudo_commitments est une doublure : la
+    condition (e) de _reject_contradictions répondrait toujours « pas joué ». La
+    fonction est prise dans le fichier voisin du bot, au même chemin relatif dans
+    l'overlay et dans l'image (comme tests/banc_promesses.py)."""
+    if not isinstance(module.engine_head_action, mock.Mock):
+        return
+    source = bot.parent / "fairdiplomacy" / "utils" / "pseudo_commitments.py"
+    try:
+        module.engine_head_action = commun.charger("mesure_bruit_pseudo_commitments", source).engine_head_action
+    except Exception as e:
+        raise ErreurReleve("%s : engine_head_action illisible (%s: %s)" % (source, type(e).__name__, e))
+
+
+def issue_de_la_regle(rejeter, ancien, nouveau, engagements, entree, marge=None):
+    """(issue, gain) de _reject_contradictions pour « promis `ancien`, déclaré rompu pour `nouveau` ».
+
+    L'appel de production (claude_dialogue_bot.process_bot) : les promesses tenues
+    sont les `engagements` et `ancien` ; `marge` None laisse celle du bot. Issue :
+    « remplace », ou le motif rendu avec l'ordre rétrogradé. Lève ErreurReleve sur
+    tout autre retour : la règle a changé, le script doit suivre."""
+    promesses = [f for f in engagements if f != ancien] + [ancien]
+    try:
+        _acceptes, retrogrades, remplaces, contradictoires, ignores = rejeter(
+            [nouveau], {DESTINATAIRE: promesses}, entree.get("plans"), margin=marge, betray=[ancien],
+            order_values=entree.get("order_values"), candidates=entree.get("candidates"), search=entree.get("search"))
+    except Exception as e:
+        raise ErreurReleve("_reject_contradictions (%s -> %s) : %s: %s" % (ancien, nouveau, type(e).__name__, e))
+    if contradictoires or ignores or len(retrogrades) + len(remplaces) != 1:
+        raise ErreurReleve(
+            "_reject_contradictions (%s -> %s) : retour inattendu (%d rétrogradé(s), %d remplacé(s), %d contradictoire(s), "
+            "%d ignoré(s)) -- la règle a changé, le script doit suivre"
+            % (ancien, nouveau, len(retrogrades), len(remplaces), len(contradictoires), len(ignores)))
+    if remplaces:
+        return "remplace", remplaces[0][3]
+    if retrogrades[0][2] not in MOTIFS:
+        raise ErreurReleve(
+            "_reject_contradictions (%s -> %s) : motif inattendu « %s » -- la règle a changé, le script doit suivre"
+            % (ancien, nouveau, retrogrades[0][2]))
+    return retrogrades[0][2], retrogrades[0][3]
+
+
+def temoin(module, bot):
+    """Lève ErreurReleve si la règle chargée ne remplace pas la promesse du témoin."""
+    try:
+        issue, _gain = issue_de_la_regle(
+            module._reject_contradictions, TEMOIN["ancien"], TEMOIN["nouveau"], (), TEMOIN["entree"])
+    except ErreurReleve as e:
+        raise ErreurReleve("%s : règle mal chargée (%s)" % (bot, e))
+    if issue != "remplace":
+        raise ErreurReleve(
+            "%s : règle mal chargée -- le témoin (%s promis, rompu pour %s, gain 0,10, %s en tête) rend « %s » au lieu "
+            "de « remplace » ; engine_head_action est-il celui de pseudo_commitments ?"
+            % (bot, TEMOIN["ancien"], TEMOIN["nouveau"], TEMOIN["nouveau"], issue))
+
+
+def charger_bot(chemin=None):
+    """(module, chemin) du bot de dialogue, chargé comme dans les essais à sec, la règle contrôlée par le témoin."""
     bot = trouver_bot(chemin)
     if not commun.cicero_present():
         commun.installer_doublures()
     try:
         module = commun.charger("mesure_bruit_claude_dialogue_bot", bot)
-        return float(module.COMMITMENT_SWITCH_MARGIN), module._order_loc, bot
+        float(module.COMMITMENT_SWITCH_MARGIN), module._order_loc, module._reject_contradictions
     except Exception as e:
         raise ErreurReleve("%s : COMMITMENT_SWITCH_MARGIN et _order_loc illisibles (%s: %s)" % (bot, type(e).__name__, e))
+    brancher_tete(module, bot)
+    temoin(module, bot)
+    return module, bot
+
+
+def charger_regle(chemin=None):
+    """(marge, _order_loc, chemin) du bot de dialogue ; la règle entière se prend dans charger_bot."""
+    module, bot = charger_bot(chemin)
+    return float(module.COMMITMENT_SWITCH_MARGIN), module._order_loc, bot
 
 
 # ---------------------------------------------------------------------------
@@ -232,6 +414,10 @@ def lire_releves(dossier, order_loc):
                 "tirage": releve.get("tirage"),
                 "g": gains(order_values, order_loc),
                 "porteuses": porteuses_de_la_table,
+                "fichier": fichier.name,
+                "tirage_du_choix": releve.get("engagement_choisi_au_tirage"),
+                # La table telle que le bot la lit, pour rejouer la règle entière.
+                "entree": {cle: entree.get(cle) for cle in ("plans", "order_values", "candidates", "search")},
             })
     if not tables:
         raise ErreurReleve("aucune table exportée dans les %d relevé(s) de %s" % (len(fichiers), dossier))
@@ -276,7 +462,16 @@ def _porteuse_changee(tables, couple):
 
 def cle_groupe(table, niveau):
     cle = table["position"] + (table["engagements"],)
-    return cle + (table["recherche"],) if niveau == "groupe" else cle
+    return cle if niveau == "engagements" else cle + (table["recherche"],)
+
+
+def tables_du_niveau(tables, niveau):
+    """Les tables d'un niveau : toutes, sauf aux deux niveaux restreints à un type de recherche."""
+    if niveau == "recherches_a":
+        return [t for t in tables if t["recherche"] == TYPE_SANS_ENGAGEMENT and not t["engagements"]]
+    if niveau == "recherches_b":
+        return [t for t in tables if t["recherche"] == TYPE_AVEC_ENGAGEMENT]
+    return tables
 
 
 def observations(tables, niveau):
@@ -372,6 +567,7 @@ def nom_groupe(cle):
 
 
 def niveau_bruit(tables, niveau, marges):
+    tables = tables_du_niveau(tables, niveau)
     obs, tailles, seuls = observations(tables, niveau)
     par_position, par_groupe = {}, {}
     for o in obs:
@@ -521,6 +717,587 @@ def effet_engagement(tables):
         "par_groupe": lignes,
     }
 
+# ---------------------------------------------------------------------------
+# Règle entière (la vraie _reject_contradictions, rejouée table par table)
+# ---------------------------------------------------------------------------
+
+def _paires(n):
+    return n * (n - 1) // 2
+
+
+def _taux(desaccords, paires):
+    return {"desaccords": desaccords, "paires": paires, "taux": _part(desaccords, paires)}
+
+
+def scenarios_de_la_regle(tables, rejeter, order_loc, marges):
+    """Une ligne par (groupe d'au moins deux tables, E, N) : l'issue de la règle dans chaque table.
+
+    Rend (lignes, états impossibles écartés par groupe, nombre de groupes d'une seule table)."""
+    groupes = {}
+    for t in tables:
+        groupes.setdefault(cle_groupe(t, "groupe"), []).append(t)
+    lignes, impossibles, seuls = [], {}, 0
+    for cle, membres in sorted(groupes.items()):
+        if len(membres) < 2:
+            seuls += 1
+            continue
+        engages = cle[3]
+        unites_engagees = {}
+        for f in engages:
+            unites_engagees.setdefault(order_loc(f), set()).add(f)
+        par_unite = {}
+        for ordre in sorted({o for t in membres for o in t["entree"]["order_values"]}):
+            if order_loc(ordre) is not None:
+                par_unite.setdefault(order_loc(ordre), []).append(ordre)
+        impossibles[cle] = 0
+        for unite, ordres in sorted(par_unite.items()):
+            for ancien, nouveau in itertools.permutations(ordres, 2):
+                if unites_engagees.get(unite, set()) - {ancien}:  # deux paroles sur une unité (exigence 2.5)
+                    impossibles[cle] += 1
+                    continue
+
+                def issues(marge):
+                    rendus = []
+                    for t in membres:
+                        try:
+                            rendus.append(issue_de_la_regle(rejeter, ancien, nouveau, engages, t["entree"], marge))
+                        except ErreurReleve as e:
+                            raise ErreurReleve("%s : %s" % (t["nom"], e))
+                    return rendus
+
+                rendus = issues(None)  # la marge du bot : l'appel de production
+                sans_marge = [issue for issue, _gain in issues(float("-inf"))]
+                if "below_margin" in sans_marge or any(
+                        (a == "unknown_value") != (b == "unknown_value") for (a, _g), b in zip(rendus, sans_marge)):
+                    raise ErreurReleve(
+                        "_reject_contradictions (%s -> %s, groupe %s) : sans marge, les issues %s ne sont pas celles "
+                        "attendues -- la règle a changé, le script doit suivre"
+                        % (ancien, nouveau, nom_groupe(cle), sans_marge))
+                g = [t["g"].get((ancien, nouveau)) for t in membres]
+                sur_bruit, sans_autre = [], []
+                for i, (issue, _gain) in enumerate(rendus):
+                    autres = [x for j, x in enumerate(g) if j != i and x is not None]
+                    sans_autre.append(issue == "remplace" and not autres)
+                    sur_bruit.append(issue == "remplace" and (not autres or sum(autres) / len(autres) <= 0))
+                lignes.append({
+                    "groupe": cle, "position": cle[:3], "couple": (ancien, nouveau),
+                    "classe": CLASSES_REGLE[0][0] if ancien in engages else CLASSES_REGLE[1][0],
+                    "tables": [t["nom"] for t in membres],
+                    "issues": [issue for issue, _gain in rendus], "gains": [gain for _issue, gain in rendus],
+                    "sans_marge": sans_marge,
+                    "par_marge": {cle_marge(m): [issue for issue, _gain in issues(m)] for m in marges},
+                    "sur_bruit": sur_bruit, "sans_autre_table": sans_autre,
+                })
+    return lignes, impossibles, seuls
+
+
+def _desaccords(listes):
+    """Désaccords par paire de tables sur la décision (« remplace » ou non), cumulés."""
+    return _taux(sum(r.count("remplace") * (len(r) - r.count("remplace")) for r in listes),
+                 sum(_paires(len(r)) for r in listes))
+
+
+def bloc_regle(lignes, marges):
+    """Indicateurs de la règle entière sur un ensemble de scénarios."""
+    issues = [ligne["issues"] for ligne in lignes]
+    disputes = [r for r in issues if "remplace" in r]
+    attribution = {motif: 0 for motif in MOTIFS}
+    propre = {"unknown_value": [0, 0], "marge": [0, 0], "condition_e": [0, 0]}
+    for ligne in lignes:
+        r, n = ligne["issues"], len(ligne["issues"])
+        for motif in MOTIFS:
+            attribution[motif] += r.count("remplace") * r.count(motif)
+        u = n - r.count("unknown_value")  # tables où l'issue est connue
+        m = u - r.count("below_margin")
+        e = ligne["sans_marge"].count("remplace")
+        for nom, d, paires in (("unknown_value", u * (n - u), _paires(n)), ("marge", m * (u - m), _paires(u)),
+                               ("condition_e", e * (u - e), _paires(u))):
+            propre[nom][0] += d
+            propre[nom][1] += paires
+    bloc = {
+        "scenarios": len(lignes),
+        "scenarios_disputes": len(disputes),
+        "scenarios_a_decision_non_unanime": sum(1 for r in disputes if r.count("remplace") < len(r)),
+        "scenarios_a_motif_non_unanime": sum(1 for r in issues if len(set(r)) > 1),
+        "issues": {issue: sum(r.count(issue) for r in issues) for issue in ISSUES},
+        "desaccord": {"tous": _desaccords(issues), "disputes": _desaccords(disputes)},
+        "attribution": attribution,
+        "instabilite_propre": {nom: _taux(d, paires) for nom, (d, paires) in propre.items()},
+        "acceptations_sur_bruit_effectives": sum(sum(ligne["sur_bruit"]) for ligne in lignes),
+        "dont_sans_autre_table": sum(sum(ligne["sans_autre_table"]) for ligne in lignes),
+        "par_marge": {},
+    }
+    bloc["part_scenarios_a_decision_non_unanime"] = _part(bloc["scenarios_a_decision_non_unanime"], len(lignes))
+    for marge in marges:
+        a_marge = [ligne["par_marge"][cle_marge(marge)] for ligne in lignes]
+        disputes_a_marge = [r for r in a_marge if "remplace" in r]
+        bloc["par_marge"][cle_marge(marge)] = {
+            "scenarios_disputes": len(disputes_a_marge),
+            "desaccord": {"tous": _desaccords(a_marge), "disputes": _desaccords(disputes_a_marge)},
+        }
+    return bloc
+
+
+def regle_entiere(tables, rejeter, order_loc, marges):
+    lignes, impossibles, seuls = scenarios_de_la_regle(tables, rejeter, order_loc, marges)
+    sortie = {
+        "appel": "_reject_contradictions([N], {%r: engagements du groupe sauf E, puis E}, plans, betray=[E], "
+                 "order_values, candidates, search) sur chaque table du groupe" % DESTINATAIRE,
+        "unite": "(groupe, E, N, table) ; groupes du niveau « groupe » d'au moins deux tables",
+        "limites": [
+            "informatif : n'entre pas dans le verdict",
+            "un désaccord entre tables n'est pas en soi un défaut de la marge : un gain réel proche du seuil "
+            "bascule quel que soit le seuil",
+            "les groupes B ne sont pas indépendants des groupes A (mise à jour incrémentale du même tirage)",
+        ],
+        "groupes_d_une_seule_table_non_rejoues": seuls,
+        "etats_impossibles_ecartes": sum(impossibles.values()),
+        "etats_impossibles_ecartes_par_groupe": {nom_groupe(g): n for g, n in sorted(impossibles.items()) if n},
+        "classes": {},
+    }
+    for classe, _titre, description in CLASSES_REGLE:
+        de_la_classe = [ligne for ligne in lignes if ligne["classe"] == classe]
+        positions = sorted({ligne["position"] for ligne in de_la_classe})
+        groupes = sorted({ligne["groupe"] for ligne in de_la_classe})
+        sortie["classes"][classe] = {
+            "definition": description,
+            "total": bloc_regle(de_la_classe, marges),
+            "par_position": {
+                nom_position(q): bloc_regle([x for x in de_la_classe if x["position"] == q], marges) for q in positions},
+            "par_groupe": {
+                nom_groupe(g): bloc_regle([x for x in de_la_classe if x["groupe"] == g], marges) for g in groupes},
+            "scenarios": [
+                {"groupe": nom_groupe(x["groupe"]), "ancien": x["couple"][0], "nouveau": x["couple"][1],
+                 "tables": x["tables"], "issues": x["issues"], "gains": x["gains"], "sans_marge": x["sans_marge"],
+                 "sur_bruit": x["sur_bruit"]}
+                for x in de_la_classe
+            ],
+        }
+    return sortie
+
+
+# ---------------------------------------------------------------------------
+# Loi de Student (bibliothèque standard : pas de statistics.NormalDist en Python 3.7)
+# ---------------------------------------------------------------------------
+
+def student_cdf(x, ddl, pas=2000):
+    """Fonction de répartition de la loi de Student, par la méthode de Simpson."""
+    if x < 0:
+        return 1 - student_cdf(-x, ddl, pas)
+
+    def densite(t):
+        return (math.exp(math.lgamma((ddl + 1) / 2.0) - math.lgamma(ddl / 2.0)) / math.sqrt(ddl * math.pi)
+                * (1 + t * t / ddl) ** (-(ddl + 1) / 2.0))
+
+    h = x / pas
+    somme = densite(0) + densite(x)
+    for i in range(1, pas):
+        somme += (4 if i % 2 else 2) * densite(i * h)
+    return 0.5 + somme * h / 3
+
+
+def student_quantile(p, ddl, pas=2000):
+    """Quantile d'ordre p >= 0,5 de la loi de Student, par dichotomie sur student_cdf."""
+    bas, haut = 0.0, 100.0
+    for _ in range(60):
+        milieu = (bas + haut) / 2
+        if student_cdf(milieu, ddl, pas) < p:
+            bas = milieu
+        else:
+            haut = milieu
+    return (bas + haut) / 2
+
+
+def quantile_975(ddl):
+    """(quantile 0,975 de Student à `ddl` degrés de liberté, approché ?)."""
+    if 1 <= ddl <= len(STUDENT_975):
+        return STUDENT_975[ddl - 1], False
+    return NORMALE_975, True
+
+
+def _fraction_de_g(g):
+    return fractions.Fraction(int(round(g * UNITE)), UNITE)
+
+
+def _arrondi(x):
+    return None if x is None else round(float(x), 10)
+
+
+def statistique(valeurs):
+    """Moyenne, écart type à n - 1, erreur type s / racine(n), t et intervalle à 95 % de Student.
+
+    `valeurs` : des fractions, pour qu'une dispersion nulle le soit exactement. À
+    moins de MIN_TIRAGES_ERREUR_TYPE valeurs, seule la moyenne est rendue. À
+    dispersion nulle, l'erreur type est 0 et t n'est pas calculé."""
+    n = len(valeurs)
+    r = {"n": n, "effet": None, "ecart_type": None, "erreur_type": None, "t": None, "ic95": None,
+         "quantile": None, "quantile_approche": None}
+    if not n:
+        return r
+    moyenne = sum(valeurs, fractions.Fraction(0)) / n
+    r["effet"] = _arrondi(moyenne)
+    if n < MIN_TIRAGES_ERREUR_TYPE:
+        return r
+    variance = sum(((x - moyenne) ** 2 for x in valeurs), fractions.Fraction(0)) / (n - 1)
+    quantile, approche = quantile_975(n - 1)
+    r.update({"quantile": quantile, "quantile_approche": approche})
+    if variance == 0:
+        r.update({"ecart_type": 0.0, "erreur_type": 0.0, "ic95": [r["effet"], r["effet"]]})
+        return r
+    ecart_type = math.sqrt(float(variance))
+    erreur_type = ecart_type / math.sqrt(n)
+    r.update({
+        "ecart_type": _arrondi(ecart_type), "erreur_type": _arrondi(erreur_type),
+        "t": _arrondi(float(moyenne) / erreur_type),
+        "ic95": [_arrondi(float(moyenne) - quantile * erreur_type), _arrondi(float(moyenne) + quantile * erreur_type)],
+    })
+    return r
+
+
+def lecture_de_l_effet(stat, marge):
+    """Lecture à trois issues d'un couple principal (plus « nul » et « sans erreur type »)."""
+    if stat["ic95"] is None:
+        return "sans erreur type"
+    bas, haut = stat["ic95"]
+    if stat["erreur_type"] == 0 and stat["effet"] == 0:
+        return "nul"
+    distinguable = bas > 0 or haut < 0
+    negligeable = -marge / 2 <= bas and haut <= marge / 2
+    if distinguable and negligeable:
+        return "distinguable du bruit, négligeable devant la marge"
+    if distinguable:
+        return "distinguable du bruit"
+    return "négligeable devant la marge" if negligeable else "non conclusif"
+
+
+LECTURES = (
+    "distinguable du bruit", "distinguable du bruit, négligeable devant la marge", "négligeable devant la marge",
+    "non conclusif", "nul", "sans erreur type",
+)
+
+
+# ---------------------------------------------------------------------------
+# Effet de la recherche B, apparié par tirage
+# ---------------------------------------------------------------------------
+
+def _variance(valeurs):
+    moyenne = sum(valeurs, fractions.Fraction(0)) / len(valeurs)
+    return sum(((x - moyenne) ** 2 for x in valeurs), fractions.Fraction(0)) / (len(valeurs) - 1)
+
+
+def _apparie_du_groupe(cle, membres, references, marge, sans_le_tirage_du_choix):
+    """L'effet apparié d'un groupe avec engagements ; `references` : {(position, fichier, tirage): [tables A]}."""
+    engages = cle[3]
+    par_tirage = {}
+    for t in membres:
+        par_tirage.setdefault((t["fichier"], t["tirage"]), []).append(t)
+    paires, non_apparies, ecartes = [], 0, 0
+    for (fichier, tirage), du_tirage in sorted(par_tirage.items(), key=lambda item: (item[0][0], str(item[0][1]))):
+        de_reference = references.get(cle[:3] + (fichier, tirage), [])
+        if tirage is None or len(du_tirage) != 1 or len(de_reference) != 1:
+            non_apparies += len(du_tirage)
+        elif sans_le_tirage_du_choix and du_tirage[0]["tirage_du_choix"] == tirage:
+            ecartes += 1
+        else:
+            paires.append((de_reference[0], du_tirage[0]))
+    par_couple = {}
+    for a, b in paires:
+        for couple in sorted(set(a["g"]) & set(b["g"])):
+            par_couple.setdefault(couple, []).append((_fraction_de_g(a["g"][couple]), _fraction_de_g(b["g"][couple])))
+    principaux, autres = [], []
+    for couple, valeurs in sorted(par_couple.items()):
+        stat = statistique([b - a for a, b in valeurs])
+        if couple[0] not in engages:
+            autres.append(stat)
+            continue
+        stat = dict({"ancien": couple[0], "nouveau": couple[1]}, **stat)
+        stat.update({"erreur_type_non_appariee": None, "t_non_apparie": None, "correlation_a_b": None})
+        if stat["n"] >= MIN_TIRAGES_ERREUR_TYPE:
+            v_a, v_b = _variance([a for a, _b in valeurs]), _variance([b for _a, b in valeurs])
+            non_appariee = math.sqrt(float(v_a + v_b) / stat["n"])
+            stat["erreur_type_non_appariee"] = _arrondi(non_appariee)
+            if non_appariee:
+                stat["t_non_apparie"] = _arrondi(stat["effet"] / non_appariee)
+            if v_a and v_b:
+                m_a = sum((a for a, _b in valeurs), fractions.Fraction(0)) / stat["n"]
+                m_b = sum((b for _a, b in valeurs), fractions.Fraction(0)) / stat["n"]
+                covariance = sum(((a - m_a) * (b - m_b) for a, b in valeurs), fractions.Fraction(0)) / (stat["n"] - 1)
+                stat["correlation_a_b"] = _arrondi(float(covariance) / math.sqrt(float(v_a * v_b)))
+        stat["lecture"] = lecture_de_l_effet(stat, marge)
+        principaux.append(stat)
+    return {
+        "groupe": nom_groupe(cle), "position": nom_position(cle[:3]), "recherche": cle[4],
+        "tirages_apparies": len(paires), "tables_sans_tirage_apparie": non_apparies,
+        "tirages_du_choix_ecartes": ecartes,
+        "couples": len(par_couple),
+        "principaux": principaux,
+        "autres": {
+            "couples": len(autres),
+            "couples_sans_erreur_type": sum(1 for x in autres if x["ic95"] is None),
+            "abs_effet": resumer([abs(x["effet"]) for x in autres]),
+            "abs_t": resumer([abs(x["t"]) for x in autres if x["t"] is not None]),
+        },
+    }
+
+
+def _entre_positions(groupes):
+    """Synthèse dont l'unité est la position : moyenne par position de l'effet de ses couples principaux."""
+    par_position = {}
+    for groupe in groupes:
+        for couple in groupe["principaux"]:
+            par_position.setdefault(groupe["position"], []).append(fractions.Fraction(repr(couple["effet"])))
+    moyennes = {q: sum(v, fractions.Fraction(0)) / len(v) for q, v in sorted(par_position.items())}
+    synthese = statistique(list(moyennes.values()))
+    synthese["positions"] = synthese.pop("n")
+    synthese["par_position"] = {q: {"couples_principaux": len(par_position[q]), "effet": _arrondi(m)}
+                                for q, m in moyennes.items()}
+    return synthese
+
+
+def effet_apparie(tables, marge):
+    """Effet de la recherche B estimé en apparié par tirage, à côté de l'estimateur non apparié."""
+    groupes, references = {}, {}
+    for t in tables:
+        groupes.setdefault(cle_groupe(t, "groupe"), []).append(t)
+        if t["recherche"] == TYPE_SANS_ENGAGEMENT and not t["engagements"]:
+            references.setdefault(t["position"] + (t["fichier"], t["tirage"]), []).append(t)
+
+    def par_groupe(sans_le_tirage_du_choix):
+        return [_apparie_du_groupe(cle, membres, references, marge, sans_le_tirage_du_choix)
+                for cle, membres in sorted(groupes.items()) if cle[3]]
+
+    lignes, sans_choix = par_groupe(False), par_groupe(True)
+    principaux = [couple for groupe in lignes for couple in groupe["principaux"]]
+    autres_sans = sum(groupe["autres"]["couples_sans_erreur_type"] for groupe in lignes)
+    sensibilite = _entre_positions(sans_choix)
+    sensibilite["tirages_du_choix_ecartes"] = sum(groupe["tirages_du_choix_ecartes"] for groupe in sans_choix)
+    return {
+        "libelle": LIBELLE_EFFET,
+        "unite": "le tirage (fichier, tirage) où coexistent la recherche %s sans engagement et la table du groupe"
+                 % TYPE_SANS_ENGAGEMENT,
+        "estimateur": "effet = moyenne des delta = G_B - G_A du tirage ; erreur type = s / racine(n), s à n - 1 ; "
+                      "intervalle à 95 %% de Student à n - 1 degrés de liberté ; pas d'erreur type à moins de %d tirages"
+                      % MIN_TIRAGES_ERREUR_TYPE,
+        "marge": marge,
+        "couples_principaux": len(principaux),
+        "couples_sans_erreur_type": sum(1 for c in principaux if c["ic95"] is None) + autres_sans,
+        "lectures_des_couples_principaux": {
+            lecture: sum(1 for c in principaux if c["lecture"] == lecture) for lecture in LECTURES},
+        "par_groupe": lignes,
+        "entre_positions": _entre_positions(lignes),
+        "sensibilite_sans_le_tirage_du_choix": sensibilite,
+        "limites": [
+            "B - A mêle le message déclencheur, la mise à jour incrémentale et l'engagement : aucune recherche B sans "
+            "engagement ne les sépare",
+            "le test de Student suppose des delta à peu près normaux ; à 5 tirages, un test de signes ne descend pas "
+            "sous p = 2/32",
+            "les couples autres que principaux sont rendus sans lecture : des centaines de tests non indépendants "
+            "donnent 5 % de faux positifs attendus",
+            "seule la synthèse entre positions a des unités indépendantes",
+            "l'engagement est choisi sur la table A d'un tirage : biais de sélection possible, d'où la synthèse refaite "
+            "sans ce tirage",
+        ],
+    }
+
+
+# ---------------------------------------------------------------------------
+# Dispersion dans un fichier et entre fichiers
+# ---------------------------------------------------------------------------
+
+def _sce(lignes, parts):
+    """(SCE inter, SCE intra) cumulées sur les couples, en unités entières au carré.
+
+    `lignes` : par couple, G entier de chaque table ; `parts` : par fichier, les indices de ses tables."""
+    inter = intra = fractions.Fraction(0)
+    for ligne in lignes:
+        for indices in parts:
+            valeurs = [ligne[i] for i in indices]
+            carre = fractions.Fraction(sum(valeurs) ** 2, len(valeurs))
+            intra += sum(v * v for v in valeurs) - carre
+            inter += carre
+        inter -= fractions.Fraction(sum(ligne) ** 2, len(ligne))
+    return inter, intra
+
+
+def repartitions(indices, tailles):
+    """Toutes les répartitions de `indices` en fichiers des tailles données, dans l'ordre."""
+    if len(tailles) == 1:
+        yield (tuple(indices),)
+        return
+    for choisis in itertools.combinations(indices, tailles[0]):
+        reste = [i for i in indices if i not in choisis]
+        for suite in repartitions(reste, tailles[1:]):
+            yield (choisis,) + suite
+
+
+def nombre_de_repartitions(tailles):
+    n = math.factorial(sum(tailles))
+    for taille in tailles:
+        n //= math.factorial(taille)
+    return n
+
+
+def _p(numerateur, denominateur):
+    return {"numerateur": numerateur, "denominateur": denominateur,
+            "fraction": "%d/%d" % (numerateur, denominateur), "valeur": numerateur / denominateur}
+
+
+def puissance_indicative(tailles):
+    """Puissance du test F à 5 % sous modèle normal, par corrélation intra-fichier : un ordre de grandeur.
+
+    Deux fichiers de même taille seulement (F à 1 degré de liberté = carré d'un Student) ; None sinon."""
+    if len(tailles) != 2 or tailles[0] != tailles[1] or 2 * (tailles[0] - 1) > len(STUDENT_975):
+        return None
+    n, ddl = tailles[0], 2 * (tailles[0] - 1)
+    critique = quantile_975(ddl)[0]
+    return {
+        "%.1f" % rho: round(2 * (1 - student_cdf(critique / math.sqrt(1 + n * rho / (1 - rho)), ddl)), 2)
+        for rho in CORRELATIONS_DE_PUISSANCE
+    }
+
+
+def dispersion_du_groupe(cle, membres):
+    par_fichier = {}
+    for i, t in enumerate(membres):
+        par_fichier.setdefault(t["fichier"], []).append(i)
+    parts = [tuple(indices) for _fichier, indices in sorted(par_fichier.items())]
+    tailles = [len(indices) for indices in parts]
+    communs = sorted(set.intersection(*(set(t["g"]) for t in membres)))
+    lignes = [[int(round(t["g"][couple] * UNITE)) for t in membres] for couple in communs]
+    ddl_intra, ddl_inter = sum(tailles) - len(parts), len(parts) - 1
+    inter, intra = _sce(lignes, parts)
+    r = {
+        "groupe": nom_groupe(cle), "position": nom_position(cle[:3]), "recherche": cle[4],
+        "fichiers": sorted(par_fichier), "tables_par_fichier": tailles,
+        "couples": len(communs),
+        "couples_ecartes_absents_d_une_table": len(set.union(*(set(t["g"]) for t in membres))) - len(communs),
+        "ddl_intra": ddl_intra, "ecart_type_intra": None, "decomposition": None,
+    }
+    if not communs or not ddl_intra:
+        return r
+    cm_intra = intra / (len(communs) * ddl_intra)
+    r["ecart_type_intra"] = _arrondi(math.sqrt(float(cm_intra)) / UNITE)
+    if len(parts) < 2 or min(tailles) < 2:
+        return r
+    cm_inter = inter / (len(communs) * ddl_inter)
+    d = {
+        "ddl_inter": ddl_inter,
+        "sce_inter": _arrondi(inter / UNITE ** 2), "sce_intra": _arrondi(intra / UNITE ** 2),
+        "sce_inter_par_couple": _arrondi(inter / UNITE ** 2 / len(communs)),
+        "sce_intra_par_couple": _arrondi(intra / UNITE ** 2 / len(communs)),
+        "cm_inter": _arrondi(cm_inter / UNITE ** 2), "cm_intra": _arrondi(cm_intra / UNITE ** 2),
+        "r": _arrondi(cm_inter / cm_intra) if cm_intra else None,
+        "correlation_intra_fichier": None,
+        "puissance_indicative": puissance_indicative(tailles),
+    }
+    if len(set(tailles)) == 1 and cm_inter + (tailles[0] - 1) * cm_intra:
+        d["correlation_intra_fichier"] = _arrondi((cm_inter - cm_intra) / (cm_inter + (tailles[0] - 1) * cm_intra))
+    f_par_couple, intra_nul = [], 0
+    for ligne in lignes:
+        inter_c, intra_c = _sce([ligne], parts)
+        if intra_c:
+            f_par_couple.append(float((inter_c / ddl_inter) / (intra_c / ddl_intra)))
+        else:
+            intra_nul += 1
+    d["f_par_couple"] = resumer(f_par_couple)
+    d["couples_a_intra_nul"] = intra_nul
+    d["reperes_sous_h0"] = None
+    if ddl_inter == 1:  # F(1, ddl) est le carré d'un Student à ddl degrés de liberté
+        d["reperes_sous_h0"] = {
+            "mediane": round(student_quantile(0.75, ddl_intra) ** 2, 3),
+            "c95": round(student_quantile(0.975, ddl_intra) ** 2, 3),
+        }
+    total = nombre_de_repartitions(tailles)
+    d["repartitions"] = total
+    if total > MAX_REPARTITIONS:
+        d.update({"p": None, "p_queue_inferieure": None, "p_minimal": None,
+                  "lecture": "pas de test : %d répartitions, plus de %d" % (total, MAX_REPARTITIONS)})
+    else:
+        superieures = inferieures = au_maximum = 0
+        maximum = None
+        for repartition in repartitions(list(range(len(membres))), tailles):
+            inter_p, intra_p = _sce(lignes, repartition)
+            superieures += inter_p * intra >= inter * intra_p  # R' >= R, sans division
+            inferieures += inter_p * intra <= inter * intra_p
+            if maximum is None or inter_p > maximum:  # la somme inter + intra ne dépend pas de la répartition
+                maximum, au_maximum = inter_p, 0
+            au_maximum += inter_p == maximum
+        d.update({
+            "p": _p(superieures, total), "p_queue_inferieure": _p(inferieures, total), "p_minimal": _p(au_maximum, total),
+            "lecture": "indépendance des tirages d'un lancement %s"
+                       % ("rejetée" if superieures <= SEUIL_P * total else "non rejetée"),
+        })
+    d["rejet"] = d["p"] is not None and d["p"]["numerateur"] <= SEUIL_P * total
+    r["decomposition"] = d
+    return r
+
+
+def tables_jumelles(tables):
+    """Paires de tables d'un même fichier, d'une même position et d'un même type, identiques par
+    order_values ou par search.lambda : le signe d'un état partagé entre tirages."""
+    par_fichier = {}
+    for t in tables:
+        par_fichier.setdefault((t["fichier"],) + t["position"] + (t["recherche"],), []).append(t)
+    examinees, memes_valeurs, meme_lambda = 0, [], []
+    for _cle, membres in sorted(par_fichier.items()):
+        for t1, t2 in itertools.combinations(membres, 2):
+            examinees += 1
+            if t1["entree"]["order_values"] == t2["entree"]["order_values"]:
+                memes_valeurs.append([t1["nom"], t2["nom"]])
+            lambdas = [t["entree"]["search"].get("lambda") if isinstance(t["entree"]["search"], dict) else None
+                       for t in (t1, t2)]
+            if _nombre(lambdas[0]) and lambdas[0] == lambdas[1]:
+                meme_lambda.append([t1["nom"], t2["nom"]])
+    return {
+        "paires_examinees": examinees,
+        "paires_jumelles": len({tuple(paire) for paire in memes_valeurs + meme_lambda}),
+        "order_values_identiques": memes_valeurs, "lambda_identique": meme_lambda,
+    }
+
+
+def dispersion(tables):
+    groupes = {}
+    for t in tables:
+        groupes.setdefault(cle_groupe(t, "groupe"), []).append(t)
+    lignes = [dispersion_du_groupe(cle, membres) for cle, membres in sorted(groupes.items()) if len(membres) >= 2]
+    intra = [ligne["ecart_type_intra"] for ligne in lignes if ligne["ecart_type_intra"] is not None]
+    jumelles = tables_jumelles(tables)
+    mises_en_garde = []
+    for ligne in lignes:
+        d = ligne["decomposition"]
+        if d and d["rejet"]:
+            mises_en_garde.append(
+                "indépendance des tirages d'un lancement rejetée (groupe %s : R = %s, p = %s = %.4f) : les tirages d'un "
+                "même fichier ne sont pas des répétitions valides"
+                % (ligne["groupe"], _f(d["r"], 2), d["p"]["fraction"], d["p"]["valeur"]))
+    if jumelles["paires_jumelles"]:
+        mises_en_garde.append(
+            "%d paire(s) de tables jumelles (même fichier, même type ; order_values identiques : %d, search.lambda "
+            "identique : %d), par exemple %s : état partagé entre tirages, qui ne sont pas des répétitions valides"
+            % (jumelles["paires_jumelles"], len(jumelles["order_values_identiques"]), len(jumelles["lambda_identique"]),
+               " et ".join((jumelles["order_values_identiques"] + jumelles["lambda_identique"])[0])))
+    return {
+        "unite": "couples présents dans toutes les tables du groupe (niveau « groupe »), G en entiers x %d" % UNITE,
+        "seuil_p": SEUIL_P, "repartitions_max": MAX_REPARTITIONS,
+        "groupes": len(lignes),
+        "groupes_decomposes": sum(1 for ligne in lignes if ligne["decomposition"]),
+        "ecart_type_intra": resumer(intra),
+        "ecart_type_intra_par_type": {
+            recherche: resumer([ligne["ecart_type_intra"] for ligne in lignes
+                                if ligne["recherche"] == recherche and ligne["ecart_type_intra"] is not None])
+            for recherche in sorted({ligne["recherche"] for ligne in lignes})},
+        "par_groupe": lignes,
+        "tables_jumelles": jumelles,
+        "mises_en_garde": mises_en_garde,
+        "limites": [
+            "un non-rejet n'établit pas l'indépendance : avec deux fichiers, l'inter-fichiers n'a qu'un degré de liberté",
+            "la corrélation intra-fichier est rendue sans intervalle : à un degré de liberté, elle n'en a pas d'utilisable",
+            "le test sur un groupe B n'est pas une confirmation indépendante de celui du groupe A",
+            "une position, une partie, des lancements consécutifs de la même image : rien sur un changement d'image "
+            "ou de machine",
+        ],
+    }
+
 
 def portee(lecture):
     """Ce que couvrent les relevés lus : parties et années, avec le rappel de l'exigence 2.10."""
@@ -534,12 +1311,14 @@ def portee(lecture):
     return texte
 
 
-def verdict(niveau, marge, nom=NIVEAU_DE_LA_SPECIFICATION):
+def verdict(niveau, marge, nom=NIVEAU_DE_LA_SPECIFICATION, independance=()):
     """Critère d'expert-cicero (#26) sur un niveau de bruit, à la marge donnée.
 
     `verdict` n'est l'issue du critère que si rien n'empêche de conclure ; sinon
     « non concluant » (« indéterminé » sans aucune observation), l'issue du
-    critère passant dans `lecture_indicative` et les raisons dans `avertissements`."""
+    critère passant dans `lecture_indicative` et les raisons dans `avertissements`.
+    `independance` : les mises en garde de la dispersion (indépendance rejetée,
+    tables jumelles) ; les tirages ne sont alors plus des répétitions valides."""
     total = niveau["total"]
     v = {
         "marge": marge, "observations": total["observations"], "lecture_indicative": None,
@@ -548,6 +1327,7 @@ def verdict(niveau, marge, nom=NIVEAU_DE_LA_SPECIFICATION):
     if not total["observations"]:
         v["verdict"] = "indéterminé"
         v["avertissements"].append(sans_observation(niveau) + " : le bruit n'est pas mesurable à ce niveau")
+        v["avertissements"].extend(independance)
         return v
     a_marge = total["par_marge"][cle_marge(marge)]
     pire_nom, pire = max(niveau["par_position"].items(), key=lambda item: item[1]["abs_d"]["c99"])
@@ -568,9 +1348,8 @@ def verdict(niveau, marge, nom=NIVEAU_DE_LA_SPECIFICATION):
     else:
         issue = "protège partiellement"
     if nom != NIVEAU_DE_LA_SPECIFICATION:
-        v["avertissements"].append(
-            "niveau « %s » : hors de la spécification, donné à titre indicatif seulement" % nom
-        )
+        v["avertissements"].append(HORS_CRITERE.get(
+            nom, "niveau « %s » : hors de la spécification, donné à titre indicatif seulement" % nom))
     if total["observations"] < MIN_OBSERVATIONS:
         v["avertissements"].append(
             "%d observation(s), moins de %d : le 99e centile est le maximum"
@@ -590,6 +1369,7 @@ def verdict(niveau, marge, nom=NIVEAU_DE_LA_SPECIFICATION):
             "des groupes réunissent des recherches de types différents (B et C d'un rejeu incrémental, "
             "qui ne sont pas deux tirages indépendants) : la valeur est un minorant du bruit"
         )
+    v["avertissements"].extend(independance)
     v["concluant"] = not v["avertissements"]
     v["verdict"] = issue if v["concluant"] else "non concluant"
     v["lecture_indicative"] = None if v["concluant"] else issue
@@ -598,15 +1378,20 @@ def verdict(niveau, marge, nom=NIVEAU_DE_LA_SPECIFICATION):
 
 def sans_observation(niveau):
     """Pourquoi un niveau n'a aucune observation."""
+    if not niveau["groupes"]:
+        return "aucune table à ce niveau"
     if not niveau["groupes_d_au_moins_deux_tables"]:
         return "aucun des %d groupe(s) ne compte deux tables" % niveau["groupes"]
     return ("%d groupe(s) d'au moins deux tables, mais aucun couple d'ordres commun à deux tables"
             % niveau["groupes_d_au_moins_deux_tables"])
 
 
-def analyser(tables, lecture, marge, marges=MARGES_BALAYEES, source_marge=None):
+def analyser(tables, lecture, marge, rejeter, order_loc, marges=MARGES_BALAYEES, source_marge=None):
     marges = tuple(sorted(set(marges) | {marge}))
     bruit = {nom: niveau_bruit(tables, nom, marges) for nom, _ in NIVEAUX}
+    effet = effet_engagement(tables)
+    effet["apparie"] = effet_apparie(tables, marge)
+    dispersions = dispersion(tables)
     return {
         "mesure": "bruit des valeurs d'une recherche à l'autre (#26)",
         "portee": portee(lecture),
@@ -625,16 +1410,16 @@ def analyser(tables, lecture, marge, marges=MARGES_BALAYEES, source_marge=None):
                 "positions": MIN_POSITIONS,
             },
         },
-        "reporte": [
-            "instabilité de la règle entière (marge, condition (e), unknown_value) par _reject_contradictions",
-            "erreur type de l'effet de l'engagement",
-            "dispersion dans un fichier et entre fichiers",
-        ],
+        "reporte": [],
+        "niveau_du_critere": NIVEAU_DE_LA_SPECIFICATION,
+        "mises_en_garde": dispersions["mises_en_garde"],
         "lecture": lecture,
         "bruit": bruit,
         "paires": synthese_paires(tables, marges),
-        "effet_engagement": effet_engagement(tables),
-        "verdict": {nom: verdict(bruit[nom], marge, nom) for nom, _ in NIVEAUX},
+        "effet_engagement": effet,
+        "regle_entiere": regle_entiere(tables, rejeter, order_loc, marges),
+        "dispersion": dispersions,
+        "verdict": {nom: verdict(bruit[nom], marge, nom, dispersions["mises_en_garde"]) for nom, _ in NIVEAUX},
     }
 
 
@@ -657,6 +1442,170 @@ def _stats(s):
 ENTETE_STATS = "%7s %8s %8s %8s %8s %8s" % ("n", "médiane", "c90", "c95", "c99", "max")
 
 
+def _dp(taux):
+    """« désaccords/paires (part) »."""
+    return "%d/%d (%s)" % (taux["desaccords"], taux["paires"], _pc(taux["taux"]))
+
+
+def _tableau_apparie(apparie, marge):
+    l = [""]
+    l.append("Effet de la recherche B (message, mise à jour incrémentale, engagement), apparié par tirage -- informatif")
+    l.append("  unité : %s." % apparie["unite"])
+    l.append("  %s." % apparie["estimateur"])
+    if not apparie["par_groupe"]:
+        l.append("  aucun groupe avec engagements")
+        return l
+    l.append("  couples principaux (E engagé -> N) : le gain que la règle lit en production")
+    l.append("  %-58s %2s %9s %8s %7s %21s %8s %6s  %s" % (
+        "", "n", "effet", "ET", "t", "IC à 95 %", "ET n.a.", "r(A,B)", "lecture"))
+    for groupe in apparie["par_groupe"]:
+        l.append("  groupe %s : %d tirage(s) apparié(s), %d table(s) sans tirage apparié"
+                 % (groupe["groupe"], groupe["tirages_apparies"], groupe["tables_sans_tirage_apparie"]))
+        for c in groupe["principaux"]:
+            ic = "-" if c["ic95"] is None else "[%+.5f ; %+.5f]" % tuple(c["ic95"])
+            l.append("    %-56s %2d %9s %8s %7s %21s %8s %6s  %s%s" % (
+                ("%s -> %s" % (c["ancien"], c["nouveau"]))[:56], c["n"],
+                "-" if c["effet"] is None else "%+.5f" % c["effet"], _f(c["erreur_type"], 5), _f(c["t"], 2), ic,
+                _f(c["erreur_type_non_appariee"], 5), _f(c["correlation_a_b"], 2), c["lecture"],
+                " (quantile approché)" if c["quantile_approche"] else ""))
+        autres = groupe["autres"]
+        if autres["couples"]:
+            l.append("    autres couples, sans lecture : %d ; |effet| médiane %s, c95 %s, max %s ; |t| médiane %s, c95 %s, "
+                     "max %s ; %d sans erreur type"
+                     % (autres["couples"], _f(autres["abs_effet"]["mediane"], 5), _f(autres["abs_effet"]["c95"], 5),
+                        _f(autres["abs_effet"]["max"], 5), _f(autres["abs_t"]["mediane"], 2), _f(autres["abs_t"]["c95"], 2),
+                        _f(autres["abs_t"]["max"], 2), autres["couples_sans_erreur_type"]))
+    l.append("  ET n.a. : erreur type non appariée, racine(s_A^2 / n + s_B^2 / n) ; r(A,B) : corrélation de G entre A et B.")
+    l.append("  lectures des %d couples principaux : %s" % (apparie["couples_principaux"], " ; ".join(
+        "%s : %d" % (lecture, n) for lecture, n in apparie["lectures_des_couples_principaux"].items() if n) or "aucune"))
+    l.append("  « distinguable du bruit » : l'intervalle exclut 0 ; « négligeable devant la marge » : il tient dans "
+             "+/- %s / 2." % marge)
+    for titre, cle in (("entre positions (unité : la position, moyenne de l'effet de ses couples principaux)",
+                        "entre_positions"),
+                       ("la même sans le tirage sur lequel l'engagement a été choisi",
+                        "sensibilite_sans_le_tirage_du_choix")):
+        e = apparie[cle]
+        ic = "-" if e["ic95"] is None else "[%+.5f ; %+.5f]" % tuple(e["ic95"])
+        l.append("  %s : %d position(s), moyenne %s, écart type %s, ET %s, t %s, IC à 95 %% %s%s%s" % (
+            titre, e["positions"], "-" if e["effet"] is None else "%+.5f" % e["effet"], _f(e["ecart_type"], 5),
+            _f(e["erreur_type"], 5), _f(e["t"], 2), ic, " (quantile approché)" if e["quantile_approche"] else "",
+            "" if cle == "entre_positions" else " ; %d tirage(s) écarté(s)" % e["tirages_du_choix_ecartes"]))
+    for limite in apparie["limites"]:
+        l.append("  limite : %s." % limite)
+    return l
+
+
+def _tableau_regle(regle, marge):
+    l = [""]
+    l.append("Règle entière : _reject_contradictions rejouée sur chaque table (marge %s) -- informatif, hors verdict"
+             % marge)
+    l.append("  scénario : le bot a promis E et déclare le rompre pour N (E, N ordres distincts d'une unité, valués dans")
+    l.append("  au moins une table du groupe) ; unité : %s." % regle["unite"])
+    l.append("  %d état(s) impossible(s) écarté(s) (E sur l'unité d'un autre engagement du groupe) ; %d groupe(s) d'une"
+             % (regle["etats_impossibles_ecartes"], regle["groupes_d_une_seule_table_non_rejoues"]))
+    l.append("  seule table non rejoué(s).")
+    for classe, titre, description in CLASSES_REGLE:
+        de_la_classe = regle["classes"][classe]
+        l.append("  classe « %s » (%s)" % (titre, description))
+        if not de_la_classe["total"]["scenarios"]:
+            l.append("    aucun scénario")
+            continue
+        l.append("    %-50s %6s %8s %9s %9s %20s %20s %8s %9s" % (
+            "", "scén.", "disputés", "déc. n.u.", "motif n.u.", "désaccord (tous)", "désaccord (disputés)", "remplace",
+            "sur bruit"))
+
+        def ligne(nom, bloc):
+            return "    %-50s %6d %8d %9d %9d %20s %20s %8d %9d" % (
+                nom[:50], bloc["scenarios"], bloc["scenarios_disputes"], bloc["scenarios_a_decision_non_unanime"],
+                bloc["scenarios_a_motif_non_unanime"], _dp(bloc["desaccord"]["tous"]),
+                _dp(bloc["desaccord"]["disputes"]), bloc["issues"]["remplace"], bloc["acceptations_sur_bruit_effectives"])
+
+        total = de_la_classe["total"]
+        l.append(ligne("total", total))
+        for nom, bloc in de_la_classe["par_position"].items():
+            l.append(ligne("position " + nom, bloc))
+        if classe == CLASSES_REGLE[0][0]:
+            for nom, bloc in de_la_classe["par_groupe"].items():
+                l.append(ligne("groupe " + nom, bloc))
+        l.append("    issues par (scénario, table) : %s" % ", ".join(
+            "%s %d" % (issue, total["issues"][issue]) for issue in ISSUES))
+        l.append("    désaccords attribués au motif de la table qui refuse : %s" % ", ".join(
+            "%s %d" % (motif, total["attribution"][motif]) for motif in MOTIFS))
+        l.append("    instabilité propre (non additive) : valeur connue %s ; marge %s ; condition (e) %s" % (
+            _dp(total["instabilite_propre"]["unknown_value"]), _dp(total["instabilite_propre"]["marge"]),
+            _dp(total["instabilite_propre"]["condition_e"])))
+        l.append("    selon la marge (scénarios disputés, désaccord sur tous) : %s" % " ; ".join(
+            "%s : %d, %s" % (m, b["scenarios_disputes"], _dp(b["desaccord"]["tous"]))
+            for m, b in total["par_marge"].items()))
+        l.append("    sur bruit : « remplace » alors que la moyenne de G des autres tables du groupe est <= 0, ou qu'aucune "
+                 "autre ne porte le couple (ce second cas : %d sur %d)."
+                 % (total["dont_sans_autre_table"], total["acceptations_sur_bruit_effectives"]))
+    l.append("  scén. : scénarios (groupe, E, N) ; disputés : au moins une table « remplace » ; déc. n.u. : décision non")
+    l.append("  unanime ; motif n.u. : issues non toutes égales ; désaccord : k x (n - k) paires de tables en désaccord")
+    l.append("  sur n x (n - 1) / 2, la probabilité que deux recherches de la même position décident différemment.")
+    for limite in regle["limites"]:
+        l.append("  limite : %s." % limite)
+    return l
+
+
+def _tableau_dispersion(dispersions):
+    l = [""]
+    l.append("Dispersion dans un fichier et entre fichiers")
+    l.append("  unité : %s." % dispersions["unite"])
+    intra = dispersions["ecart_type_intra"]
+    l.append("  écart type intra-fichier de G, par groupe d'au moins deux tables (%d groupe(s)) : médiane %s, c95 %s, max %s"
+             % (intra["n"], _f(intra["mediane"], 5), _f(intra["c95"], 5), _f(intra["max"], 5)))
+    for recherche, s in dispersions["ecart_type_intra_par_type"].items():
+        l.append("    recherches %s (%d groupe(s)) : médiane %s, c95 %s, max %s"
+                 % (recherche, s["n"], _f(s["mediane"], 5), _f(s["c95"], 5), _f(s["max"], 5)))
+    jumelles = dispersions["tables_jumelles"]
+    l.append("  tables jumelles (même fichier, même type) : %d paire(s) sur %d examinée(s) -- order_values identiques : %d, "
+             "search.lambda identique : %d ; attendu : 0"
+             % (jumelles["paires_jumelles"], jumelles["paires_examinees"], len(jumelles["order_values_identiques"]),
+                len(jumelles["lambda_identique"])))
+    decomposes = [g for g in dispersions["par_groupe"] if g["decomposition"]]
+    if not decomposes:
+        l.append("  aucun groupe réparti sur au moins deux fichiers d'au moins deux tables : pas de décomposition, pas de "
+                 "test d'indépendance des tirages d'un lancement")
+    for g in decomposes:
+        d = g["decomposition"]
+        l.append("  groupe %s : fichiers de %s tables, %d couple(s) (%d écarté(s), absents d'une table)"
+                 % (g["groupe"], " et ".join(str(n) for n in g["tables_par_fichier"]), g["couples"],
+                    g["couples_ecartes_absents_d_une_table"]))
+        l.append("    SCE inter %s (%d ddl par couple), SCE intra %s (%d ddl par couple) ; R = CM inter / CM intra = %s ; "
+                 "écart type intra %s ; corrélation intra-fichier %s (sans intervalle)"
+                 % (_f(d["sce_inter"], 6), d["ddl_inter"], _f(d["sce_intra"], 6), g["ddl_intra"], _f(d["r"], 3),
+                    _f(g["ecart_type_intra"], 5), _f(d["correlation_intra_fichier"], 5)))
+        f = d["f_par_couple"]
+        reperes = d["reperes_sous_h0"]
+        l.append("    F par couple (%d, %d à intra nul) : médiane %s, c95 %s, max %s%s"
+                 % (f["n"], d["couples_a_intra_nul"], _f(f["mediane"], 3), _f(f["c95"], 3), _f(f["max"], 3),
+                    "" if not reperes else " ; repères sous H0 : médiane %.3f, 5 %% au-dessus de %.3f"
+                    % (reperes["mediane"], reperes["c95"])))
+        if d["p"] is None:
+            l.append("    %s" % d["lecture"])
+        else:
+            l.append("    permutation exacte des tables entre fichiers (%d répartitions) : p = %s = %.4f (plus petit p "
+                     "atteignable : %s = %.4f) ; queue inférieure %s"
+                     % (d["repartitions"], d["p"]["fraction"], d["p"]["valeur"], d["p_minimal"]["fraction"],
+                        d["p_minimal"]["valeur"], d["p_queue_inferieure"]["fraction"]))
+            l.append("    lecture, au seuil de %s : %s%s" % (
+                dispersions["seuil_p"], d["lecture"].upper() if d["rejet"] else d["lecture"],
+                "" if d["rejet"] else " (non rejetée n'est pas établie)"))
+        if d["puissance_indicative"]:
+            l.append("    puissance indicative (modèle normal, seuil de 5 %%), par corrélation intra-fichier : %s"
+                     % " ; ".join("%s : %d sur 100" % (rho, round(100 * x))
+                                  for rho, x in d["puissance_indicative"].items()))
+        else:
+            l.append("    puissance indicative : non calculée (hors du cas de deux fichiers de même taille)")
+        if g["recherche"] != TYPE_SANS_ENGAGEMENT:
+            l.append("    type %s : pas une confirmation indépendante du test sur le type %s."
+                     % (g["recherche"], TYPE_SANS_ENGAGEMENT))
+    for limite in dispersions["limites"]:
+        l.append("  limite : %s." % limite)
+    return l
+
+
 def tableau(resultat):
     marge = cle_marge(resultat["marge"])
     lecture = resultat["lecture"]
@@ -673,6 +1622,13 @@ def tableau(resultat):
     l.append("  grandeur : %s" % resultat["grandeur"])
     l.append("  marge : %s (COMMITMENT_SWITCH_MARGIN, lue dans %s)" % (marge, resultat["marge_lue_dans"]))
     l.append("  portée : %s" % resultat["portee"])
+    for mise_en_garde in resultat["mises_en_garde"]:
+        l.append("  MISE EN GARDE : %s" % mise_en_garde)
+    if resultat["mises_en_garde"]:
+        l.append("  (ces mises en garde entrent dans les avertissements du verdict, qui n'est alors pas concluant)")
+    l.append("  Le critère se lit sur les recherches A sans engagement, seules. La recherche B d'un tirage est une mise")
+    l.append("  à jour incrémentale de sa recherche A : ses observations ne sont pas indépendantes de celles de A. Les")
+    l.append("  niveaux « recherches_b », « groupe » (cumul A + B) et « engagements » sont informatifs.")
 
     for nom, description in NIVEAUX:
         niveau = resultat["bruit"][nom]
@@ -761,8 +1717,8 @@ def tableau(resultat):
 
     effet = resultat["effet_engagement"]
     l.append("")
-    l.append("Effet de l'engagement, à part du bruit : moyenne de G avec engagements - moyenne de G en %s"
-             % effet["reference"])
+    l.append("Effet de la recherche B (message, mise à jour incrémentale, engagement), non apparié : moyenne de G avec")
+    l.append("engagements - moyenne de G en %s" % effet["reference"])
     if not effet["par_groupe"]:
         l.append("  aucun groupe avec engagements qui ait sa recherche de référence")
     else:
@@ -781,10 +1737,18 @@ def tableau(resultat):
         l.append("  statistiques de |effet| par couple ; vers eng. : couples (E, N) dont N est un ordre engagé, et leur")
         l.append("  effet moyen signé. À une table par groupe, l'effet n'est pas séparable du bruit de cette table.")
 
+    l.extend(_tableau_apparie(effet["apparie"], marge))
+    l.extend(_tableau_regle(resultat["regle_entiere"], marge))
+    l.extend(_tableau_dispersion(resultat["dispersion"]))
+
     l.append("")
     l.append("Verdict selon le critère d'expert-cicero (#26), marge %s" % marge)
     for nom, _description in NIVEAUX:
         v = resultat["verdict"][nom]
+        if nom == NIVEAU_DE_LA_SPECIFICATION:
+            l.append("  Critère lu sur les recherches A sans engagement, seules :")
+        elif nom == NIVEAUX[1][0]:
+            l.append("  À titre informatif, hors verdict (les observations B ne sont pas indépendantes de celles de A) :")
         if "c99_total" not in v:
             l.append("  niveau « %s » : %s" % (nom, v["verdict"].upper()))
         else:
@@ -802,7 +1766,8 @@ def tableau(resultat):
         for avertissement in v["avertissements"]:
             l.append("    AVERTISSEMENT : %s" % avertissement)
     l.append("  Portée : %s." % resultat["portee"])
-    l.append("  Reporté : %s." % " ; ".join(resultat["reporte"]))
+    if resultat["reporte"]:
+        l.append("  Reporté : %s." % " ; ".join(resultat["reporte"]))
     return "\n".join(l)
 
 
@@ -830,10 +1795,11 @@ def main(argv=None):
     p.add_argument("--bot", help="chemin de claude_dialogue_bot.py (défaut : celui du dépôt, sinon de l'image)")
     args = p.parse_args(argv)
     try:
-        marge, order_loc, bot = charger_regle(args.bot)
+        module, bot = charger_bot(args.bot)
+        marge, order_loc = float(module.COMMITMENT_SWITCH_MARGIN), module._order_loc
         tables, lecture = lire_releves(args.dossier, order_loc)
         sortie = Path(args.sortie) if args.sortie else sortie_par_defaut(args.dossier)
-        resultat = analyser(tables, lecture, marge, source_marge=bot.name)
+        resultat = analyser(tables, lecture, marge, module._reject_contradictions, order_loc, source_marge=bot.name)
         try:
             sortie.parent.mkdir(parents=True, exist_ok=True)
             sortie.write_text(json.dumps(resultat, ensure_ascii=False, indent=1) + "\n", encoding="utf-8")

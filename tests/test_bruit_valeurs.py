@@ -42,16 +42,27 @@ VALEURS = {
 }
 
 
-def releve(actions, order_values, recherche="A", tirage=0, engagements=(), phase="S1901M", puissance="FRANCE"):
+def releve(actions, order_values, recherche="A", tirage=0, engagements=(), phase="S1901M", puissance="FRANCE",
+           search=None, prob=0.1, choix=None):
     """Une ligne de relevé, réduite aux clés que lit bruit_valeurs."""
-    return {
+    ligne = {
         "mesure": "M1", "game_id": 9, "phase": phase, "puissance": puissance, "tirage": tirage,
         "recherche": recherche, "engagements_retenus_par_le_moteur": list(engagements),
         "entree": {
             "order_values": order_values,
-            "candidates": [{"orders": list(a), "value": v, "prob": 0.1} for a, v in actions],
+            "candidates": [{"orders": list(a), "value": v, "prob": prob} for a, v in actions],
         },
     }
+    if search is not None:
+        ligne["entree"]["search"] = search
+    if choix is not None:
+        ligne["engagement_choisi_au_tirage"] = choix
+    return ligne
+
+
+def deux_ordres(g, **cles):
+    """Une table à une unité et deux ordres, G(BUR, PIC) = g."""
+    return releve([((BUR,), 0.30), ((PIC,), round(0.30 + g, 5))], {BUR: 0.30, PIC: round(0.30 + g, 5)}, **cles)
 
 
 class Dossier:
@@ -151,7 +162,7 @@ class Verdict(unittest.TestCase):
     """Les trois issues du critère, à leurs bornes ; aucun verdict sans les effectifs pour conclure."""
 
     def rendu(self, c95, c99, c99_pire, sur_bruit, observations=1000, sans_gain=1000, positions=10, tables=3,
-              reunis=False, marge=0.05, nom="groupe"):
+              reunis=False, marge=0.05, nom="recherches_a", independance=()):
         par_position = {"p%d" % i: {"abs_d": {"c99": 0.0}} for i in range(positions - 1)}
         par_position["pire"] = {"abs_d": {"c99": c99_pire}}
         niveau = {
@@ -166,7 +177,7 @@ class Verdict(unittest.TestCase):
                 }},
             },
         }
-        return bruit.verdict(niveau, marge, nom)
+        return bruit.verdict(niveau, marge, nom, independance)
 
     def test_protege(self):
         # Bornes comprises : c99 = marge / 2 au total, = marge dans la pire position.
@@ -214,6 +225,21 @@ class Verdict(unittest.TestCase):
     def test_niveau_engagements_jamais_concluant(self):
         self.non_concluant("à titre indicatif", nom="engagements")
 
+    def test_critere_lu_sur_les_recherches_a_seules(self):
+        # Décision du mainteneur (2026-10-10) : seul le niveau « recherches_a » peut conclure ; le cumul
+        # A + B et les recherches B, qui ne sont pas indépendantes de A, restent indicatifs.
+        self.assertEqual(bruit.NIVEAU_DE_LA_SPECIFICATION, "recherches_a")
+        self.assertEqual([nom for nom, _ in bruit.NIVEAUX], ["recherches_a", "recherches_b", "groupe", "engagements"])
+        self.non_concluant("cumul des recherches A et B", nom="groupe")
+        self.non_concluant("mise à jour incrémentale", nom="recherches_b")
+
+    def test_independance_rejetee_ou_tables_jumelles(self):
+        # Une mise en garde de la dispersion suffit à ne pas conclure, effectifs remplis.
+        self.non_concluant("rejetée", independance=("indépendance des tirages d'un lancement rejetée",))
+        sans_observation = dict(groupes=1, groupes_d_au_moins_deux_tables=0, total={"observations": 0})
+        v = bruit.verdict(sans_observation, 0.05, independance=("tables jumelles",))
+        self.assertEqual((v["verdict"], v["avertissements"][1:]), ("indéterminé", ["tables jumelles"]))
+
 
 class Script(unittest.TestCase):
     def test_deux_tables_identiques(self):
@@ -227,19 +253,29 @@ class Script(unittest.TestCase):
         for marge in total["par_marge"].values():
             self.assertEqual((marge["couples_non_unanimes"], marge["acceptations_sur_bruit"]), (0, 0))
         self.assertEqual(total["par_marge"]["0.05"]["marge_effective"], 0.05)
-        # Critère rempli, mais 8 observations, 2 tables et 1 position : rien à conclure.
-        verdict = detail["verdict"]["groupe"]
+        # Critère rempli, mais 8 observations, 2 tables et 1 position : rien à conclure. Et deux tables
+        # identiques d'un même fichier sont des tables jumelles : quatrième avertissement.
+        verdict = detail["verdict"]["recherches_a"]
         self.assertEqual(
             (verdict["verdict"], verdict["lecture_indicative"], verdict["concluant"]),
             ("non concluant", "protège", False))
-        self.assertEqual(len(verdict["avertissements"]), 3)
+        self.assertEqual(len(verdict["avertissements"]), 4)
+        self.assertIn("1 paire(s) de tables jumelles", verdict["avertissements"][3])
+        self.assertEqual(detail["mises_en_garde"], verdict["avertissements"][3:])
+        self.assertIn("  MISE EN GARDE : 1 paire(s) de tables jumelles", sortie)
+        self.assertIn("  niveau « recherches_a » : NON CONCLUANT -- lecture indicative : le critère donnerait « protège »\n",
+                      sortie)
         self.assertEqual(detail["verdict"]["engagements"]["verdict"], "non concluant")
         self.assertIn(
             "niveau « groupe » : NON CONCLUANT -- lecture indicative : le critère donnerait « protège »\n", sortie)
         self.assertNotRegex(sortie, r"niveau « \w+ » : (PROTÈGE|NE PROTÈGE)")
         self.assertIn("exigence 2.10", sortie)
-        self.assertIn("Reporté : instabilité de la règle entière", sortie)
-        self.assertEqual(len(detail["reporte"]), 3)
+        # Les trois compléments reportés sont faits : plus rien d'annoncé, chacun a sa clé.
+        self.assertNotIn("Reporté", sortie)
+        self.assertEqual(detail["reporte"], [])
+        for cle in ("regle_entiere", "dispersion"):
+            self.assertIn(cle, detail)
+        self.assertIn("apparie", detail["effet_engagement"])
 
     def test_un_seul_gain_differe(self):
         # T1 et T2 dans le même groupe. G(BUR, PIC) : 0,00 et 0,08 ; G(PIC, BUR) : 0,00 et -0,08 ;
@@ -311,7 +347,7 @@ class Script(unittest.TestCase):
         m = total["par_marge"]["0.05"]
         self.assertEqual((m["couples_non_unanimes"], m["acceptations"], m["acceptations_sur_bruit"]), (1, 1, 0))
         # Trois tables : l'avertissement « écart d'une paire » ne s'applique plus.
-        self.assertEqual(len(detail["verdict"]["groupe"]["avertissements"]), 2)
+        self.assertEqual(len(detail["verdict"]["recherches_a"]["avertissements"]), 2)
 
     def test_action_porteuse_changee(self):
         # T1 et T3 : PIC passe de (PIC, MAO) à (PIC, ENG), les trois autres ordres gardent leur action.
@@ -451,6 +487,473 @@ class Script(unittest.TestCase):
         self.assertEqual(
             detail["portee"],
             "1 partie (9), 1901 à 1903 : mesuré sur une partie, ce qui ne fonde pas une statistique (exigence 2.10)")
+
+
+# Cas du complément 1 (spécification d'expert-cicero, § 1.6) : une unité, lambda nul -- le score est la
+# valeur, donc l'action de tête est celle de plus grande valeur parmi celles qui tiennent les promesses
+# renforcées ; ici la plus grande valeur tout court. order_values se déduit des actions.
+#   T1 : PIC 0,40  BUR 0,30            T2 : PIC 0,33  BUR 0,30
+#   T3 : BUR 0,30                      T4 : GAS 0,90  PIC 0,40  BUR 0,30
+LAMBDA_NUL = {"lambda": 0.0, "boost": 3.0, "max_prob": 0.4}
+TABLES_REGLE = (
+    [((PIC,), 0.40), ((BUR,), 0.30)], [((PIC,), 0.33), ((BUR,), 0.30)], [((BUR,), 0.30)],
+    [((GAS,), 0.90), ((PIC,), 0.40), ((BUR,), 0.30)],
+)
+
+
+def table_regle(actions, **cles):
+    return releve(actions, {a[0]: v for a, v in actions}, search=LAMBDA_NUL, prob=0.25, **cles)
+
+
+class RegleChargee(unittest.TestCase):
+    """T0 : la vraie _reject_contradictions, avec le vrai engine_head_action, contrôlée par un témoin."""
+
+    def test_vraie_fonction_de_tete(self):
+        module, chemin = bruit.charger_bot()
+        self.assertEqual(chemin, BOT)
+        self.assertNotIsInstance(module.engine_head_action, mock.Mock)
+        self.assertEqual(module.engine_head_action.__name__, "engine_head_action")
+        entree = bruit.TEMOIN["entree"]
+        self.assertEqual(bruit.issue_de_la_regle(module._reject_contradictions, BUR, PIC, (), entree), ("remplace", 0.1))
+
+    @unittest.skipIf(Path("/opt/cicero/fairdiplomacy").is_dir(), "dans l'image, engine_head_action n'est pas une doublure")
+    def test_temoin_sous_doublure(self):
+        # engine_head_action laissé en doublure : la règle rend not_played sur le témoin, le chargement lève.
+        with mock.patch.object(bruit, "brancher_tete", lambda module, bot: None):
+            with self.assertRaises(bruit.ErreurReleve) as refus:
+                bruit.charger_regle()
+        self.assertIn("règle mal chargée", str(refus.exception))
+        self.assertIn("« not_played » au lieu de « remplace »", str(refus.exception))
+        # Et le script s'arrête sur ce message, code 2, sans rien écrire.
+        d = Dossier(self)
+        d.ecrire("m1_9_a.jsonl", [releve(T1, VALEURS["T1"])])
+        with mock.patch.object(bruit, "brancher_tete", lambda module, bot: None):
+            code, sortie, erreur, detail = d.lancer()
+        self.assertEqual((code, sortie, detail), (2, "", None))
+        self.assertRegex(erreur, r"^bruit_valeurs : .*règle mal chargée")
+
+    def test_fichier_et_entree_gardes_par_table(self):
+        d = Dossier(self)
+        d.ecrire("m1_9_a.jsonl", [table_regle(TABLES_REGLE[0], tirage=3, choix=0)])
+        _marge, order_loc, _chemin = bruit.charger_regle()
+        tables, _lecture = bruit.lire_releves(d.chemin, order_loc)
+        self.assertEqual((tables[0]["fichier"], tables[0]["tirage"], tables[0]["tirage_du_choix"]), ("m1_9_a.jsonl", 3, 0))
+        self.assertEqual(sorted(tables[0]["entree"]), ["candidates", "order_values", "plans", "search"])
+        self.assertEqual(tables[0]["entree"]["order_values"], {PIC: 0.40, BUR: 0.30})
+        self.assertEqual((tables[0]["entree"]["search"], tables[0]["entree"]["plans"]), (LAMBDA_NUL, None))
+
+    def test_retour_inattendu_de_la_regle(self):
+        entree = bruit.TEMOIN["entree"]
+
+        def rend(retour):
+            return lambda *a, **k: retour
+
+        for retour, motif in (
+            (([], [(PIC, BUR, "undeclared", None)], [], [], []), "motif inattendu « undeclared »"),
+            (([], [(PIC, BUR, "below_margin", 0.01)], [], [], [(BUR, "restated")]), "retour inattendu"),
+            (([PIC], [], [], [], []), "retour inattendu"),
+            (([], [], [], [(BUR, PIC)], []), "retour inattendu"),
+            (([], []), "ValueError"),
+        ):
+            with self.assertRaises(bruit.ErreurReleve) as refus:
+                bruit.issue_de_la_regle(rend(retour), BUR, PIC, (), entree)
+            self.assertIn(motif, str(refus.exception))
+
+
+class RegleEntiere(unittest.TestCase):
+    """Complément 1 : les deux groupes du cas fabriqué, sur la vraie fonction."""
+
+    def lancer(self, recherche, engagements):
+        d = Dossier(self)
+        d.ecrire("m1_9_a.jsonl", [
+            table_regle(actions, recherche=recherche, engagements=engagements, tirage=i)
+            for i, actions in enumerate(TABLES_REGLE)])
+        code, sortie, erreur, detail = d.lancer()
+        self.assertEqual((code, erreur), (0, ""))
+        return sortie, detail["regle_entiere"]
+
+    def issues(self, classe):
+        return {(x["ancien"], x["nouveau"]): x["issues"] for x in classe["scenarios"]}
+
+    def test_groupe_b_table_a_jour(self):
+        sortie, regle = self.lancer("B", [BUR])
+        # BUR est engagé : PIC et GAS comme promesse rompue seraient une seconde parole sur PAR --
+        # 4 états impossibles (PIC -> BUR, PIC -> GAS, GAS -> BUR, GAS -> PIC), 2 scénarios à jour.
+        self.assertEqual(regle["etats_impossibles_ecartes"], 4)
+        self.assertEqual(regle["classes"]["table_anterieure"]["total"]["scenarios"], 0)
+        classe = regle["classes"]["table_a_jour"]
+        # BUR -> PIC : gain 0,10 > marge et PIC en tête (T1) ; 0,03 sous la marge (T2) ; PIC absent (T3) ;
+        # gain 0,10 mais GAS en tête (T4). BUR -> GAS : GAS n'est que dans T4, gain 0,60.
+        self.assertEqual(self.issues(classe), {
+            (BUR, PIC): ["remplace", "below_margin", "unknown_value", "not_played"],
+            (BUR, GAS): ["unknown_value", "unknown_value", "unknown_value", "remplace"],
+        })
+        par_couple = {(x["ancien"], x["nouveau"]): x for x in classe["scenarios"]}
+        self.assertEqual(par_couple[(BUR, PIC)]["gains"], [0.1, 0.03, None, 0.1])
+        self.assertEqual(par_couple[(BUR, GAS)]["gains"], [None, None, None, 0.6])
+        # Sans marge : la condition (e) seule.
+        self.assertEqual(par_couple[(BUR, PIC)]["sans_marge"], ["remplace", "remplace", "unknown_value", "not_played"])
+        self.assertEqual(par_couple[(BUR, GAS)]["sans_marge"], ["unknown_value"] * 3 + ["remplace"])
+        total = classe["total"]
+        self.assertEqual((total["scenarios"], total["scenarios_disputes"]), (2, 2))
+        self.assertEqual((total["scenarios_a_decision_non_unanime"], total["scenarios_a_motif_non_unanime"]), (2, 2))
+        self.assertEqual(total["part_scenarios_a_decision_non_unanime"], 1.0)
+        # Désaccords : k (n - k) = 1 x 3 par scénario, sur 6 paires chacun.
+        self.assertEqual(total["desaccord"]["tous"], {"desaccords": 6, "paires": 12, "taux": 0.5})
+        self.assertEqual(total["desaccord"]["disputes"], total["desaccord"]["tous"])
+        self.assertEqual(total["attribution"], {"unknown_value": 4, "below_margin": 1, "not_played": 1})
+        self.assertEqual(sum(total["attribution"].values()), total["desaccord"]["tous"]["desaccords"])
+        # Instabilités propres. Valeur connue : u = 3 puis 1 -> 3 x 1 + 1 x 3 = 6 sur 12. Marge : sur les
+        # 3 tables connues de BUR -> PIC, 2 hors below_margin -> 2 x 1 sur 3 paires ; BUR -> GAS, u = 1 : 0 sur 0.
+        # Condition (e) : 2 « remplace » sans marge sur 3 connues -> 2 sur 3.
+        propre = total["instabilite_propre"]
+        self.assertEqual((propre["unknown_value"]["desaccords"], propre["unknown_value"]["paires"]), (6, 12))
+        self.assertEqual((propre["marge"]["desaccords"], propre["marge"]["paires"]), (2, 3))
+        self.assertEqual((propre["condition_e"]["desaccords"], propre["condition_e"]["paires"]), (2, 3))
+        self.assertEqual(total["issues"], {"remplace": 2, "unknown_value": 4, "below_margin": 1, "not_played": 1})
+        # Sur bruit : T1 remplace BUR -> PIC, les autres tables donnent G = 0,03 et 0,10 -> non ;
+        # T4 remplace BUR -> GAS, aucune autre table ne porte le couple -> oui.
+        self.assertEqual((total["acceptations_sur_bruit_effectives"], total["dont_sans_autre_table"]), (1, 1))
+        # Balayage. BUR -> PIC : à 0,02, T2 (0,03) remplace aussi : k = 2, 2 x 2 = 4 ; à 0,03 et au-delà T2
+        # est sous la marge : 3 ; à 0,10, 0,10 ne dépasse plus : k = 0. BUR -> GAS : 3 partout.
+        self.assertEqual(
+            {m: (b["scenarios_disputes"], b["desaccord"]["tous"]["desaccords"], b["desaccord"]["disputes"]["paires"])
+             for m, b in total["par_marge"].items()},
+            {"0.02": (2, 7, 12), "0.03": (2, 6, 12), "0.05": (2, 6, 12), "0.08": (2, 6, 12), "0.10": (1, 3, 6)})
+        self.assertEqual(classe["par_groupe"], {"9 S1901M FRANCE | A PAR - BUR | B": total})
+        self.assertEqual(classe["par_position"], {"9 S1901M FRANCE": total})
+        self.assertIn("Règle entière : _reject_contradictions rejouée", sortie)
+        self.assertIn("6/12 (50.0 %)", sortie)
+        self.assertIn("unknown_value 4, below_margin 1, not_played 1", sortie)
+
+    def test_groupe_a_table_anterieure(self):
+        _sortie, regle = self.lancer("A", [])
+        self.assertEqual(regle["etats_impossibles_ecartes"], 0)
+        self.assertEqual(regle["classes"]["table_a_jour"]["total"]["scenarios"], 0)
+        classe = regle["classes"]["table_anterieure"]
+        inconnu = ["unknown_value"] * 3
+        self.assertEqual(self.issues(classe), {
+            (BUR, PIC): ["remplace", "below_margin", "unknown_value", "not_played"],
+            (BUR, GAS): inconnu + ["remplace"],
+            (PIC, BUR): ["below_margin", "below_margin", "unknown_value", "below_margin"],
+            (PIC, GAS): inconnu + ["remplace"],
+            (GAS, BUR): inconnu + ["below_margin"],
+            (GAS, PIC): inconnu + ["below_margin"],
+        })
+        total = classe["total"]
+        self.assertEqual((total["scenarios"], total["scenarios_a_decision_non_unanime"]), (6, 3))
+        self.assertEqual(total["desaccord"]["tous"], {"desaccords": 9, "paires": 36, "taux": 0.25})
+        self.assertEqual(total["desaccord"]["disputes"], {"desaccords": 9, "paires": 18, "taux": 0.5})
+        self.assertEqual(total["attribution"], {"unknown_value": 7, "below_margin": 1, "not_played": 1})
+        propre = total["instabilite_propre"]
+        self.assertEqual(
+            [(propre[c]["desaccords"], propre[c]["paires"]) for c in ("unknown_value", "marge", "condition_e")],
+            [(18, 36), (2, 6), (2, 6)])
+        # Sur bruit : BUR -> GAS et PIC -> GAS, remplacés dans T4, seule table à porter GAS.
+        self.assertEqual((total["acceptations_sur_bruit_effectives"], total["dont_sans_autre_table"]), (2, 2))
+
+    def test_groupe_d_une_seule_table_non_rejoue(self):
+        d = Dossier(self)
+        d.ecrire("m1_9_a.jsonl", [table_regle(TABLES_REGLE[0])])
+        _code, _sortie, _erreur, detail = d.lancer()
+        regle = detail["regle_entiere"]
+        self.assertEqual(regle["groupes_d_une_seule_table_non_rejoues"], 1)
+        self.assertEqual([regle["classes"][c]["total"]["scenarios"] for c, _t, _d in bruit.CLASSES_REGLE], [0, 0])
+
+    def test_regle_qui_change_arrete_le_script(self):
+        # Un retour que le script ne connaît pas, sur une table : message, code 2, pas de résultat.
+        d = Dossier(self)
+        d.ecrire("m1_9_a.jsonl", [table_regle(a, tirage=i) for i, a in enumerate(TABLES_REGLE[:2])])
+        with mock.patch.object(bruit, "MOTIFS", ("unknown_value", "not_played")):
+            code, sortie, erreur, detail = d.lancer()
+        self.assertEqual((code, sortie, detail), (2, "", None))
+        self.assertRegex(erreur, r"^bruit_valeurs : .*motif inattendu « below_margin »")
+
+
+class Student(unittest.TestCase):
+    def test_table_recalculee_par_integration(self):
+        # La table codée, contre la dichotomie sur l'intégrale de la densité, et contre les valeurs
+        # publiées à 3 décimales (1, 2, 4, 10 et 20 degrés de liberté).
+        self.assertEqual(len(bruit.STUDENT_975), 20)
+        for ddl, code in enumerate(bruit.STUDENT_975, 1):
+            self.assertAlmostEqual(bruit.student_quantile(0.975, ddl), code, places=5)
+        publiees = {1: 12.706, 2: 4.303, 4: 2.776, 10: 2.228, 20: 2.086}
+        for ddl, valeur in publiees.items():
+            self.assertEqual(round(bruit.STUDENT_975[ddl - 1], 3), valeur)
+        self.assertEqual(bruit.quantile_975(20), (2.085963, False))
+        self.assertEqual(bruit.quantile_975(21), (1.96, True))
+        self.assertAlmostEqual(bruit.student_cdf(-1.0, 1), 0.25, places=9)  # loi de Cauchy : 1/2 - atan(1) / pi
+
+    def test_puissance_indicative(self):
+        # Les quatre chiffres de la spécification (§ 3.4), deux fichiers de 5 tables.
+        self.assertEqual(bruit.puissance_indicative([5, 5]), {"0.2": 0.16, "0.5": 0.37, "0.8": 0.63, "0.9": 0.74})
+        self.assertIsNone(bruit.puissance_indicative([5, 4]))
+        self.assertIsNone(bruit.puissance_indicative([4, 4, 4]))
+
+
+class EffetApparie(unittest.TestCase):
+    """Complément 2 : l'effet de la recherche B, apparié par tirage."""
+
+    def lancer(self, g_a, g_b, choix=None):
+        d = Dossier(self)
+        lignes = []
+        for i, (a, b) in enumerate(zip(g_a, g_b)):
+            lignes.append(releve([((BUR,), 0.50), ((PIC,), round(0.50 + a, 5))],
+                                 {BUR: 0.50, PIC: round(0.50 + a, 5)}, tirage=i))
+            lignes.append(releve([((BUR,), 0.50), ((PIC,), round(0.50 + b, 5))],
+                                 {BUR: 0.50, PIC: round(0.50 + b, 5)}, tirage=i, recherche="B", engagements=[BUR],
+                                 choix=choix))
+        d.ecrire("m1_9_a.jsonl", lignes)
+        code, sortie, erreur, detail = d.lancer()
+        self.assertEqual((code, erreur), (0, ""))
+        return sortie, detail["effet_engagement"]
+
+    def test_cas_fabrique(self):
+        # G_A(BUR, PIC) = -0,02 ; -0,03 ; -0,01 et G_B = -0,05 ; -0,07 ; -0,03 :
+        #   delta = -0,03 ; -0,04 ; -0,02 -> effet -0,03, s = 0,01, ET = 0,01 / racine(3) = 0,0057735,
+        #   t = -5,196, IC = -0,03 -/+ 4,302653 x 0,0057735 = [-0,054841 ; -0,005159].
+        #   Non apparié : s_A = 0,01, s_B = 0,02 -> racine((0,0001 + 0,0004) / 3) = 0,012910, t = -2,324.
+        #   G_B = 2 G_A - 0,01 : corrélation 1.
+        sortie, effet = self.lancer((-0.02, -0.03, -0.01), (-0.05, -0.07, -0.03))
+        apparie = effet["apparie"]
+        self.assertEqual(apparie["libelle"], "effet de la recherche B (message, mise à jour incrémentale, engagement)")
+        groupe = apparie["par_groupe"][0]
+        self.assertEqual((groupe["groupe"], groupe["tirages_apparies"], groupe["tables_sans_tirage_apparie"]),
+                         ("9 S1901M FRANCE | A PAR - BUR | B", 3, 0))
+        # Un seul couple principal : celui qui part de l'ordre engagé. (PIC, BUR) est un « autre ».
+        self.assertEqual([(c["ancien"], c["nouveau"]) for c in groupe["principaux"]], [(BUR, PIC)])
+        self.assertEqual(groupe["autres"]["couples"], 1)
+        c = groupe["principaux"][0]
+        self.assertEqual(c["n"], 3)
+        for cle, attendu in (("effet", -0.03), ("ecart_type", 0.01), ("erreur_type", 0.0057735), ("t", -5.196152),
+                             ("erreur_type_non_appariee", 0.012910), ("t_non_apparie", -2.323790),
+                             ("correlation_a_b", 1.0)):
+            self.assertAlmostEqual(c[cle], attendu, delta=1e-6, msg=cle)
+        self.assertAlmostEqual(c["ic95"][0], -0.054841, delta=1e-6)
+        self.assertAlmostEqual(c["ic95"][1], -0.005159, delta=1e-6)
+        self.assertEqual((c["quantile"], c["quantile_approche"]), (4.302653, False))
+        # L'intervalle exclut 0, et déborde de -0,025 : distinguable, pas négligeable devant 0,05.
+        self.assertEqual(c["lecture"], "distinguable du bruit")
+        self.assertEqual(apparie["lectures_des_couples_principaux"]["distinguable du bruit"], 1)
+        # Une seule position : pas d'erreur type entre positions.
+        self.assertEqual((apparie["entre_positions"]["positions"], apparie["entre_positions"]["effet"]), (1, -0.03))
+        self.assertIsNone(apparie["entre_positions"]["ic95"])
+        # L'estimateur non apparié reste sous ses clés : moyenne de G_B - moyenne de G_A = -0,03 pour (BUR, PIC),
+        # +0,03 pour (PIC, BUR), le seul tourné vers l'ordre engagé.
+        self.assertEqual(effet["total"]["effet_moyen_vers_l_ordre_engage"], 0.03)
+        self.assertEqual(effet["par_groupe"][0]["tables_avec"], 3)
+        self.assertIn("Effet de la recherche B (message, mise à jour incrémentale, engagement), apparié par tirage", sortie)
+        self.assertIn("[-0.05484 ; -0.00516]", sortie)
+        self.assertNotIn("Effet de l'engagement", sortie)
+
+    def test_moins_de_trois_tirages(self):
+        _sortie, effet = self.lancer((-0.02, -0.03), (-0.05, -0.07))
+        c = effet["apparie"]["par_groupe"][0]["principaux"][0]
+        self.assertEqual((c["n"], c["effet"], c["lecture"]), (2, -0.035, "sans erreur type"))
+        self.assertEqual((c["erreur_type"], c["t"], c["ic95"], c["erreur_type_non_appariee"]), (None, None, None, None))
+        # Les deux couples du groupe, le principal et l'autre.
+        self.assertEqual(effet["apparie"]["couples_sans_erreur_type"], 2)
+
+    def test_dispersion_nulle_sans_division(self):
+        # Trois delta égaux à -0,03 : s = 0 exactement, pas de t ; l'effet n'est pas nul -> distinguable.
+        _sortie, effet = self.lancer((-0.02, -0.03, -0.01), (-0.05, -0.06, -0.04))
+        c = effet["apparie"]["par_groupe"][0]["principaux"][0]
+        self.assertEqual((c["effet"], c["ecart_type"], c["erreur_type"], c["t"]), (-0.03, 0.0, 0.0, None))
+        self.assertEqual((c["ic95"], c["lecture"]), ([-0.03, -0.03], "distinguable du bruit"))
+        # Trois delta nuls : « nul ».
+        _sortie, effet = self.lancer((-0.02, -0.03, -0.01), (-0.02, -0.03, -0.01))
+        c = effet["apparie"]["par_groupe"][0]["principaux"][0]
+        self.assertEqual((c["effet"], c["erreur_type"], c["t"], c["lecture"]), (0.0, 0.0, None, "nul"))
+
+    def test_negligeable_devant_la_marge(self):
+        # delta = -0,001 ; 0,000 ; +0,001 : effet 0, s = 0,001, ET = 0,00057735, IC = +/- 0,002484 :
+        # contient 0 et tient dans +/- 0,025.
+        _sortie, effet = self.lancer((0.0, 0.0, 0.0), (-0.001, 0.0, 0.001))
+        c = effet["apparie"]["par_groupe"][0]["principaux"][0]
+        self.assertAlmostEqual(c["ic95"][1], 0.002484, delta=1e-6)
+        self.assertEqual(c["lecture"], "négligeable devant la marge")
+        # delta = -0,03 ; 0 ; +0,03 : IC = +/- 4,302653 x 0,03 / racine(3) = +/- 0,074524 : non conclusif.
+        _sortie, effet = self.lancer((0.0, 0.0, 0.0), (-0.03, 0.0, 0.03))
+        self.assertEqual(effet["apparie"]["par_groupe"][0]["principaux"][0]["lecture"], "non conclusif")
+
+    def test_sensibilite_sans_le_tirage_du_choix(self):
+        # L'engagement a été choisi sur la table A du tirage 0 : sans lui, delta = -0,04 ; -0,02 -> -0,03 aussi,
+        # mais sur 2 tirages ; avec lui -0,03 sur 3.
+        _sortie, effet = self.lancer((-0.02, -0.03, -0.01), (-0.08, -0.07, -0.03), choix=0)
+        apparie = effet["apparie"]
+        self.assertAlmostEqual(apparie["entre_positions"]["effet"], -0.04)  # (-0,06 - 0,04 - 0,02) / 3
+        sans = apparie["sensibilite_sans_le_tirage_du_choix"]
+        self.assertEqual((sans["tirages_du_choix_ecartes"], sans["positions"], sans["effet"]), (1, 1, -0.03))
+
+    def test_table_sans_tirage_apparie(self):
+        # Une table B sans recherche A de même tirage dans le même fichier n'entre pas dans l'estimateur.
+        d = Dossier(self)
+        d.ecrire("m1_9_a.jsonl", [deux_ordres(-0.02, tirage=0)])
+        d.ecrire("m1_9_b.jsonl", [deux_ordres(-0.05, tirage=0, recherche="B", engagements=[BUR])])
+        _code, _sortie, _erreur, detail = d.lancer()
+        groupe = detail["effet_engagement"]["apparie"]["par_groupe"][0]
+        self.assertEqual((groupe["tirages_apparies"], groupe["tables_sans_tirage_apparie"], groupe["principaux"]), (0, 1, []))
+        self.assertEqual(detail["effet_engagement"]["total"]["groupes"], 1)  # le non apparié, lui, les réunit
+
+
+class Dispersion(unittest.TestCase):
+    """Complément 3 : dispersion dans un fichier et entre fichiers, test par permutation exacte."""
+
+    def lancer(self, fichier_1, fichier_2, **cles):
+        d = Dossier(self)
+        d.ecrire("m1_9_a.jsonl", [deux_ordres(g, tirage=i, **cles) for i, g in enumerate(fichier_1)])
+        d.ecrire("m1_9_b.jsonl", [deux_ordres(g, tirage=i, **cles) for i, g in enumerate(fichier_2)])
+        code, sortie, erreur, detail = d.lancer()
+        self.assertEqual((code, erreur), (0, ""))
+        return sortie, detail
+
+    def decomposition(self, detail):
+        groupes = detail["dispersion"]["par_groupe"]
+        self.assertEqual(len(groupes), 1)
+        self.assertEqual(groupes[0]["couples"], 2)  # (BUR, PIC) et (PIC, BUR) : mêmes SCE
+        return groupes[0], groupes[0]["decomposition"]
+
+    def test_deux_fichiers_de_cinq_separes(self):
+        # Fichier 1 : 0,10 à 0,14 (moyenne 0,12) ; fichier 2 : 0,30 à 0,34 (0,32) ; moyenne générale 0,22.
+        #   SCE intra = 2 x (0,02^2 + 0,01^2 + 0 + 0,01^2 + 0,02^2) = 0,002 ; SCE inter = 10 x 0,1^2 = 0,1 ;
+        #   CM intra = 0,002 / 8, CM inter = 0,1 / 1 : R = 400 ; rho = (0,1 - 0,00025) / (0,1 + 4 x 0,00025) = 0,98762.
+        #   Seules les deux répartitions d'origine (les fichiers échangés) atteignent R : p = 2/252.
+        sortie, detail = self.lancer((0.10, 0.11, 0.12, 0.13, 0.14), (0.30, 0.31, 0.32, 0.33, 0.34))
+        groupe, d = self.decomposition(detail)
+        self.assertEqual((groupe["tables_par_fichier"], groupe["ddl_intra"], d["ddl_inter"]), ([5, 5], 8, 1))
+        self.assertAlmostEqual(d["sce_inter_par_couple"], 0.1)
+        self.assertAlmostEqual(d["sce_intra_par_couple"], 0.002)
+        self.assertEqual(d["r"], 400.0)
+        self.assertAlmostEqual(groupe["ecart_type_intra"], 0.0158114, places=7)  # racine(0,00025)
+        self.assertEqual((d["repartitions"], d["p"]["fraction"], d["p"]["numerateur"], d["p"]["denominateur"]),
+                         (252, "2/252", 2, 252))
+        self.assertAlmostEqual(d["p"]["valeur"], 2 / 252)
+        self.assertEqual(d["p_minimal"]["fraction"], "2/252")
+        self.assertEqual(d["p_queue_inferieure"]["fraction"], "252/252")
+        self.assertAlmostEqual(d["correlation_intra_fichier"], 0.98762, places=5)
+        self.assertEqual((d["rejet"], d["lecture"]), (True, "indépendance des tirages d'un lancement rejetée"))
+        self.assertEqual(d["reperes_sous_h0"], {"mediane": 0.499, "c95": 5.318})
+        self.assertEqual(d["puissance_indicative"], {"0.2": 0.16, "0.5": 0.37, "0.8": 0.63, "0.9": 0.74})
+        self.assertIn("p = 2/252 = 0.0079", sortie)
+        self.assertIn("0.2 : 16 sur 100 ; 0.5 : 37 sur 100 ; 0.8 : 63 sur 100 ; 0.9 : 74 sur 100", sortie)
+        # Le rejet est une mise en garde en tête du tableau, et entre dans les avertissements du niveau
+        # sur lequel le verdict est lu (décision du mainteneur, 2026-10-10) : non concluant.
+        self.assertEqual(len(detail["mises_en_garde"]), 1)
+        self.assertIn("indépendance des tirages d'un lancement rejetée", detail["mises_en_garde"][0])
+        self.assertIn("  MISE EN GARDE : indépendance des tirages d'un lancement rejetée", sortie)
+        verdict = detail["verdict"]["recherches_a"]
+        self.assertEqual((verdict["verdict"], verdict["concluant"]), ("non concluant", False))
+        self.assertIn(detail["mises_en_garde"][0], verdict["avertissements"])
+        self.assertEqual(detail["dispersion"]["tables_jumelles"]["paires_jumelles"], 0)
+
+    def test_deux_fichiers_de_cinq_identiques(self):
+        # Mêmes valeurs dans les deux fichiers : SCE inter = 0, R = 0, toute répartition fait au moins autant
+        # (252/252) ; rho = (0 - 0,00025) / (0 + 4 x 0,00025) = -0,25, sans troncature.
+        sortie, detail = self.lancer((0.10, 0.11, 0.12, 0.13, 0.14), (0.10, 0.11, 0.12, 0.13, 0.14))
+        _groupe, d = self.decomposition(detail)
+        self.assertEqual((d["sce_inter"], d["r"], d["p"]["fraction"], d["p"]["valeur"]), (0.0, 0.0, "252/252", 1.0))
+        self.assertAlmostEqual(d["sce_intra_par_couple"], 0.002)
+        self.assertEqual(d["correlation_intra_fichier"], -0.25)
+        self.assertEqual((d["rejet"], d["lecture"]), (False, "indépendance des tirages d'un lancement non rejetée"))
+        self.assertIn("non rejetée (non rejetée n'est pas établie)", sortie)
+        # Ni mise en garde ni avertissement d'indépendance : les tables jumelles se cherchent dans un même fichier.
+        self.assertEqual(detail["mises_en_garde"], [])
+        self.assertNotIn("MISE EN GARDE", sortie)
+        avertissements = " ".join(detail["verdict"]["recherches_a"]["avertissements"])
+        self.assertNotIn("indépendance", avertissements)
+        self.assertNotIn("jumelles", avertissements)
+        self.assertEqual(len(detail["verdict"]["recherches_a"]["avertissements"]), 2)  # 20 observations, 1 position
+
+    def test_deux_fichiers_de_deux(self):
+        # 0,10 ; 0,12 et 0,20 ; 0,22 : SCE intra = 4 x 0,01^2 = 0,0004, SCE inter = 4 x 0,05^2 = 0,01,
+        # R = 0,01 / (0,0004 / 2) = 50 ; 6 répartitions, 2 atteignent R : p = 2/6, le plus petit possible --
+        # un R énorme reste non rejeté quand l'échantillon est trop petit.
+        _sortie, detail = self.lancer((0.10, 0.12), (0.20, 0.22))
+        _groupe, d = self.decomposition(detail)
+        self.assertAlmostEqual(d["sce_inter_par_couple"], 0.01)
+        self.assertAlmostEqual(d["sce_intra_par_couple"], 0.0004)
+        self.assertEqual((d["r"], d["p"]["fraction"], d["p_minimal"]["fraction"], d["rejet"]), (50.0, "2/6", "2/6", False))
+        self.assertAlmostEqual(d["correlation_intra_fichier"], 0.96078, places=5)
+        self.assertEqual(detail["mises_en_garde"], [])
+
+    def test_type_b_decompose_a_part(self):
+        # Le type B a son propre groupe ; son rejet est signalé, sans valoir confirmation de celui de A.
+        sortie, detail = self.lancer((0.10, 0.11, 0.12, 0.13, 0.14), (0.30, 0.31, 0.32, 0.33, 0.34),
+                                     recherche="B", engagements=[BUR])
+        groupe, d = self.decomposition(detail)
+        self.assertEqual((groupe["recherche"], d["rejet"]), ("B", True))
+        self.assertIn("type B : pas une confirmation indépendante du test sur le type A", sortie)
+
+    def test_un_seul_fichier_pas_de_decomposition(self):
+        d = Dossier(self)
+        d.ecrire("m1_9_a.jsonl", [deux_ordres(g, tirage=i) for i, g in enumerate((0.10, 0.11, 0.12, 0.13, 0.14))])
+        _code, sortie, _erreur, detail = d.lancer()
+        groupe = detail["dispersion"]["par_groupe"][0]
+        self.assertIsNone(groupe["decomposition"])
+        self.assertAlmostEqual(groupe["ecart_type_intra"], 0.0158114, places=7)  # racine(0,001 / 4)
+        self.assertEqual(detail["dispersion"]["groupes_decomposes"], 0)
+        self.assertIn("aucun groupe réparti sur au moins deux fichiers", sortie)
+
+    def test_trop_de_repartitions_pas_de_test(self):
+        self.assertEqual(bruit.nombre_de_repartitions([5, 5]), 252)
+        self.assertEqual(bruit.nombre_de_repartitions([2, 2, 2]), 90)
+        self.assertEqual(len(list(bruit.repartitions(list(range(6)), [2, 2, 2]))), 90)
+        with mock.patch.object(bruit, "MAX_REPARTITIONS", 5):
+            _sortie, detail = self.lancer((0.10, 0.12), (0.20, 0.22))
+        d = detail["dispersion"]["par_groupe"][0]["decomposition"]
+        self.assertEqual((d["p"], d["rejet"], d["lecture"]), (None, False, "pas de test : 6 répartitions, plus de 5"))
+
+    def test_tables_jumelles(self):
+        # Deux lignes d'un même fichier aux order_values identiques : 1 paire. Deux autres au même lambda,
+        # valeurs différentes : 1 paire de plus. D'un fichier à l'autre, ou d'un type à l'autre : aucune.
+        d = Dossier(self)
+        d.ecrire("m1_9_a.jsonl", [deux_ordres(0.10, tirage=0), deux_ordres(0.10, tirage=1),
+                                  deux_ordres(0.10, tirage=1, recherche="B", engagements=[BUR])])
+        d.ecrire("m1_9_b.jsonl", [deux_ordres(0.10, tirage=0, search={"lambda": 0.12}),
+                                  deux_ordres(0.11, tirage=1, search={"lambda": 0.12}),
+                                  deux_ordres(0.12, tirage=2, search={"lambda": 0.13})])
+        _code, sortie, _erreur, detail = d.lancer()
+        jumelles = detail["dispersion"]["tables_jumelles"]
+        self.assertEqual(jumelles["order_values_identiques"], [["m1_9_a.jsonl:1", "m1_9_a.jsonl:2"]])
+        self.assertEqual(jumelles["lambda_identique"], [["m1_9_b.jsonl:1", "m1_9_b.jsonl:2"]])
+        self.assertEqual((jumelles["paires_jumelles"], jumelles["paires_examinees"]), (2, 4))
+        self.assertIn("  MISE EN GARDE : 2 paire(s) de tables jumelles", sortie)
+        self.assertIn("2 paire(s) de tables jumelles", " ".join(detail["verdict"]["recherches_a"]["avertissements"]))
+
+
+class CritereSurLesRecherchesA(unittest.TestCase):
+    def test_les_recherches_b_n_entrent_pas_dans_le_verdict(self):
+        # A : G(BUR, PIC) = 0,000 ; 0,001 ; 0,002 -- |d| <= 0,0015. B : 0,00 ; 0,03 ; 0,09 -- |d| jusqu'à 0,075.
+        # Le critère, lu sur A seul, donnerait « protège » ; le cumul A + B donnerait « ne protège pas ».
+        d = Dossier(self)
+        d.ecrire("m1_9_a.jsonl", [deux_ordres(g, tirage=i) for i, g in enumerate((0.0, 0.001, 0.002))] + [
+            deux_ordres(g, tirage=i, recherche="B", engagements=[BUR]) for i, g in enumerate((0.0, 0.03, 0.09))])
+        code, sortie, _erreur, detail = d.lancer()
+        self.assertEqual(code, 0)
+        self.assertEqual(detail["niveau_du_critere"], "recherches_a")
+        self.assertEqual([detail["bruit"][n]["total"]["observations"] for n, _ in bruit.NIVEAUX], [6, 6, 12, 12])
+        self.assertAlmostEqual(detail["bruit"]["recherches_a"]["total"]["abs_d"]["max"], 0.0015)
+        self.assertAlmostEqual(detail["bruit"]["recherches_b"]["total"]["abs_d"]["max"], 0.075)
+        lectures = {n: detail["verdict"][n]["lecture_indicative"] for n, _ in bruit.NIVEAUX}
+        self.assertEqual(lectures, {"recherches_a": "protège", "recherches_b": "ne protège pas",
+                                    "groupe": "ne protège pas", "engagements": "ne protège pas"})
+        # Seuls les effectifs retiennent le niveau du critère ; les trois autres portent en plus leur mention.
+        self.assertEqual(len(detail["verdict"]["recherches_a"]["avertissements"]), 2)
+        for nom in ("recherches_b", "groupe", "engagements"):
+            self.assertIn("à titre indicatif seulement", detail["verdict"][nom]["avertissements"][0])
+        self.assertIn("ses observations ne sont pas indépendantes de celles de A", sortie)
+        self.assertLess(sortie.index("Critère lu sur les recherches A sans engagement, seules :"),
+                        sortie.index("À titre informatif, hors verdict"))
+
+    def test_recherche_a_avec_engagements_hors_du_critere(self):
+        # Une recherche A lancée avec des engagements n'est pas la recherche de référence.
+        d = Dossier(self)
+        d.ecrire("m1_9_a.jsonl", [deux_ordres(g, tirage=i, engagements=[BUR]) for i, g in enumerate((0.0, 0.03))])
+        _code, _sortie, _erreur, detail = d.lancer()
+        self.assertEqual(detail["bruit"]["recherches_a"]["groupes"], 0)
+        self.assertEqual(detail["verdict"]["recherches_a"]["verdict"], "indéterminé")
+        self.assertIn("aucune table à ce niveau", detail["verdict"]["recherches_a"]["avertissements"][0])
+        self.assertEqual(detail["bruit"]["groupe"]["total"]["observations"], 4)
 
 
 class RelevesIllisibles(unittest.TestCase):
