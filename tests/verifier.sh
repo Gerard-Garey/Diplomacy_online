@@ -28,7 +28,7 @@ done < <(find cicero/overlay webdiplomacy/overlay tests -name '*.py')
 # En cas d'échec, la sortie entière est affichée : elle nomme les tests en cause.
 # Un défaut connu y est un échec attendu (« expected failures ») ; un succès inattendu
 # fait sortir unittest en erreur : la marque est alors à retirer du test.
-for t in tests/test_etat_dialogue.py tests/test_promesses.py; do
+for t in tests/test_etat_dialogue.py tests/test_promesses.py tests/test_bruit_valeurs.py; do
   if sortie=$(env -u PYTHONDONTWRITEBYTECODE python3 "$t" 2>&1); then
     echo "$sortie" | tail -n 3
   else
