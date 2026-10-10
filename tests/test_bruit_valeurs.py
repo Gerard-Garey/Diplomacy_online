@@ -98,6 +98,17 @@ class Regle(unittest.TestCase):
         self.assertNotIn(ecrite.group(0), Path(bruit.__file__).read_text(encoding="utf-8"))
         self.assertEqual(order_loc("A PAR-BUR"), "PAR")  # la normalisation du bot
 
+    def test_bot_sans_sa_regle(self):
+        # Un fichier qui a la marge et _order_loc, pas _reject_contradictions : le message nomme les trois.
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        faux = Path(tmp.name) / "claude_dialogue_bot.py"
+        faux.write_text("COMMITMENT_SWITCH_MARGIN = 0.05\n\n\ndef _order_loc(ordre):\n    return None\n", encoding="utf-8")
+        with self.assertRaises(bruit.ErreurReleve) as refus:
+            bruit.charger_bot(str(faux))
+        self.assertIn("COMMITMENT_SWITCH_MARGIN, _order_loc ou _reject_contradictions illisible (AttributeError",
+                      str(refus.exception))
+
     def test_bot_introuvable(self):
         with self.assertRaises(bruit.ErreurReleve):
             bruit.charger_regle("/nulle/part/claude_dialogue_bot.py")
@@ -162,7 +173,7 @@ class Verdict(unittest.TestCase):
     """Les trois issues du critère, à leurs bornes ; aucun verdict sans les effectifs pour conclure."""
 
     def rendu(self, c95, c99, c99_pire, sur_bruit, observations=1000, sans_gain=1000, positions=10, tables=3,
-              reunis=False, marge=0.05, nom="recherches_a", independance=()):
+              reunis=False, marge=0.05, nom="recherches_a", independance=(), porteurs=(0, 0, 0)):
         par_position = {"p%d" % i: {"abs_d": {"c99": 0.0}} for i in range(positions - 1)}
         par_position["pire"] = {"abs_d": {"c99": c99_pire}}
         niveau = {
@@ -173,6 +184,7 @@ class Verdict(unittest.TestCase):
                 "abs_d": {"c95": c95, "c99": c99},
                 "par_marge": {bruit.cle_marge(marge): {
                     "acceptations_sur_bruit": sur_bruit, "marge_effective": marge - c99,
+                    "tables_sur_bruit": porteurs[0], "ordres_sur_bruit": porteurs[1], "positions_sur_bruit": porteurs[2],
                     "part_sur_bruit_des_observations_sans_gain": sur_bruit / sans_gain if sans_gain else None,
                 }},
             },
@@ -232,6 +244,14 @@ class Verdict(unittest.TestCase):
         self.assertEqual([nom for nom, _ in bruit.NIVEAUX], ["recherches_a", "recherches_b", "groupe", "engagements"])
         self.non_concluant("cumul des recherches A et B", nom="groupe")
         self.non_concluant("mise à jour incrémentale", nom="recherches_b")
+
+    def test_porteurs_des_acceptations_sans_effet_sur_l_issue(self):
+        # Trois acceptations sur bruit dans une table ou dans trois : le même « protège partiellement »,
+        # les trois décomptes sont recopiés tels quels.
+        une, trois = self.rendu(0.01, 0.02, 0.02, 3, porteurs=(1, 1, 1)), self.rendu(0.01, 0.02, 0.02, 3, porteurs=(3, 3, 3))
+        self.assertEqual((une["verdict"], trois["verdict"]), ("protège partiellement", "protège partiellement"))
+        self.assertEqual((une["tables_sur_bruit"], une["ordres_sur_bruit"], une["positions_sur_bruit"]), (1, 1, 1))
+        self.assertEqual((trois["tables_sur_bruit"], trois["ordres_sur_bruit"], trois["positions_sur_bruit"]), (3, 3, 3))
 
     def test_independance_rejetee_ou_tables_jumelles(self):
         # Une mise en garde de la dispersion suffit à ne pas conclure, effectifs remplis.
@@ -348,6 +368,83 @@ class Script(unittest.TestCase):
         self.assertEqual((m["couples_non_unanimes"], m["acceptations"], m["acceptations_sur_bruit"]), (1, 1, 0))
         # Trois tables : l'avertissement « écart d'une paire » ne s'applique plus.
         self.assertEqual(len(detail["verdict"]["recherches_a"]["avertissements"]), 2)
+
+    def test_porteurs_des_acceptations_sur_bruit(self):
+        # Deux positions, cinq tables chacune, trois ordres pour PAR. FRANCE : BUR 0,30, PIC 0,30, GAS 0,30
+        # dans quatre tables ; dans la cinquième BUR tombe à 0,20 -- G(BUR, PIC) = G(BUR, GAS) = 0,10 > marge
+        # alors que la moyenne des quatre autres est 0 : 2 acceptations sur bruit, dans 1 table, pour 1 ordre E
+        # (BUR), 1 position. ENGLAND : la même, et une seconde table où c'est PIC qui tombe à 0,20 --
+        # G(PIC, BUR) = G(PIC, GAS) = 0,10, moyenne des autres (0 ; 0 ; 0 ; -0,10) / 4 < 0. La table où BUR
+        # tombe garde G(BUR, GAS) = 0,10 sur bruit (les autres : 0), et G(BUR, PIC) = 0,10 contre
+        # (0 ; 0 ; 0 ; -0,10) / 4 : sur bruit aussi. 4 acceptations, 2 tables, 2 couples (table, ordre E).
+        # Total : 6 acceptations sur bruit, dans 3 tables, 3 ordres, 2 positions.
+        def table(bur=0.30, pic=0.30, **cles):
+            return releve([((BUR,), bur), ((PIC,), pic), ((GAS,), 0.30)], {BUR: bur, PIC: pic, GAS: 0.30}, **cles)
+
+        d = Dossier(self)
+        d.ecrire("m1_9_a.jsonl", [table(tirage=i) for i in range(4)] + [table(bur=0.20, tirage=4)])
+        d.ecrire("m1_9_b.jsonl", [table(tirage=i, puissance="ENGLAND") for i in range(3)] + [
+            table(bur=0.20, tirage=3, puissance="ENGLAND"), table(pic=0.20, tirage=4, puissance="ENGLAND")])
+        code, sortie, _erreur, detail = d.lancer()
+        self.assertEqual(code, 0)
+        niveau = detail["bruit"]["recherches_a"]
+
+        def porteurs(bloc):
+            m = bloc["par_marge"]["0.05"]
+            return m["acceptations_sur_bruit"], m["tables_sur_bruit"], m["ordres_sur_bruit"], m["positions_sur_bruit"]
+
+        self.assertEqual(porteurs(niveau["par_position"]["9 S1901M FRANCE"]), (2, 1, 1, 1))
+        self.assertEqual(porteurs(niveau["par_position"]["9 S1901M ENGLAND"]), (4, 2, 2, 1))
+        self.assertEqual(porteurs(niveau["total"]), (6, 3, 3, 2))
+        # À la marge de 0,10, G = 0,10 ne la dépasse plus : rien, nulle part.
+        m = niveau["total"]["par_marge"]["0.10"]
+        self.assertEqual((m["acceptations_sur_bruit"], m["tables_sur_bruit"], m["ordres_sur_bruit"],
+                          m["positions_sur_bruit"]), (0, 0, 0, 0))
+        verdict = detail["verdict"]["recherches_a"]
+        self.assertEqual((verdict["acceptations_sur_bruit"], verdict["tables_sur_bruit"], verdict["ordres_sur_bruit"],
+                          verdict["positions_sur_bruit"]), (6, 3, 3, 2))
+        self.assertIn(", 6 acceptation(s) sur bruit, dans 3 tables, 3 ordres, 2 positions (", sortie)
+        self.assertIn("  les 6 acceptation(s) sur bruit sont dans 3 tables, 3 ordres, 2 positions (ordre : couple (table, "
+                      "ordre E)).", sortie)
+
+    def test_une_table_deux_ordres_et_une_acceptation_hors_bruit(self):
+        # Trois unités, cinq tables. MAR : G(A MAR H, A MAR - SPA) = 0,20 dans les cinq tables -- cinq
+        # acceptations, aucune sur bruit (la moyenne des autres est 0,20). PAR et BRE : tout à 0,30, sauf la
+        # cinquième table où BUR et MAO tombent à 0,20 -- G(BUR, PIC) = G(MAO, ENG) = 0,10 contre 0 ailleurs.
+        # 7 acceptations, dont 2 sur bruit : dans 1 table, pour 2 ordres E (BUR, MAO), 1 position.
+        tient, spa = "A MAR H", "A MAR - SPA"
+
+        def table(tirage, bas=0.30):
+            valeurs = {BUR: bas, PIC: 0.30, MAO: bas, ENG: 0.30, tient: 0.30, spa: 0.50}
+            return releve([((ordre,), v) for ordre, v in valeurs.items()], valeurs, tirage=tirage)
+
+        d = Dossier(self)
+        d.ecrire("m1_9_a.jsonl", [table(i) for i in range(4)] + [table(4, bas=0.20)])
+        _code, sortie, _erreur, detail = d.lancer()
+        m = detail["bruit"]["recherches_a"]["total"]["par_marge"]["0.05"]
+        self.assertEqual((m["acceptations"], m["acceptations_sur_bruit"]), (7, 2))
+        self.assertEqual((m["tables_sur_bruit"], m["ordres_sur_bruit"], m["positions_sur_bruit"]), (1, 2, 1))
+        verdict = detail["verdict"]["recherches_a"]
+        self.assertEqual((verdict["acceptations_sur_bruit"], verdict["tables_sur_bruit"], verdict["ordres_sur_bruit"],
+                          verdict["positions_sur_bruit"]), (2, 1, 2, 1))
+        self.assertIn(", 2 acceptation(s) sur bruit, dans 1 table, 2 ordres, 1 position (", sortie)
+        self.assertIn("  les 2 acceptation(s) sur bruit sont dans 1 table, 2 ordres, 1 position (", sortie)
+
+    def test_porteurs_au_singulier(self):
+        # La seule position FRANCE du cas précédent : « dans 1 table, 1 ordre, 1 position ».
+        d = Dossier(self)
+        d.ecrire("m1_9_a.jsonl", [
+            releve([((BUR,), bur), ((PIC,), 0.30), ((GAS,), 0.30)], {BUR: bur, PIC: 0.30, GAS: 0.30}, tirage=i)
+            for i, bur in enumerate((0.30, 0.30, 0.30, 0.30, 0.20))])
+        _code, sortie, _erreur, detail = d.lancer()
+        self.assertEqual(detail["verdict"]["recherches_a"]["acceptations_sur_bruit"], 2)
+        self.assertIn(", 2 acceptation(s) sur bruit, dans 1 table, 1 ordre, 1 position (", sortie)
+        # Sans acceptation sur bruit, rien à situer : la ligne du verdict s'en tient au décompte.
+        d = Dossier(self)
+        d.ecrire("m1_9_a.jsonl", [deux_ordres(g, tirage=i) for i, g in enumerate((0.0, 0.001, 0.002))])
+        _code, sortie, _erreur, _detail = d.lancer()
+        self.assertIn(", 0 acceptation(s) sur bruit (0.0 % des ", sortie)
+        self.assertNotIn("acceptation(s) sur bruit sont dans", sortie)
 
     def test_action_porteuse_changee(self):
         # T1 et T3 : PIC passe de (PIC, MAO) à (PIC, ENG), les trois autres ordres gardent leur action.
@@ -612,8 +709,14 @@ class RegleEntiere(unittest.TestCase):
         self.assertEqual((propre["condition_e"]["desaccords"], propre["condition_e"]["paires"]), (2, 3))
         self.assertEqual(total["issues"], {"remplace": 2, "unknown_value": 4, "below_margin": 1, "not_played": 1})
         # Sur bruit : T1 remplace BUR -> PIC, les autres tables donnent G = 0,03 et 0,10 -> non ;
-        # T4 remplace BUR -> GAS, aucune autre table ne porte le couple -> oui.
-        self.assertEqual((total["acceptations_sur_bruit_effectives"], total["dont_sans_autre_table"]), (1, 1))
+        # T4 remplace BUR -> GAS, aucune autre table ne porte le couple : compté à part, pas sur bruit.
+        self.assertEqual((total["acceptations_sur_bruit_effectives"], total["acceptations_sans_autre_table"]), (0, 1))
+        self.assertNotIn("dont_sans_autre_table", total)
+        self.assertEqual((par_couple[(BUR, GAS)]["sur_bruit"], par_couple[(BUR, GAS)]["sans_autre_table"]),
+                         ([False] * 4, [False, False, False, True]))
+        self.assertEqual(par_couple[(BUR, PIC)]["sans_autre_table"], [False] * 4)
+        self.assertIn("ne porte le couple : 1, compté à part", sortie)
+        self.assertRegex(sortie, r"\n    total +2 +2 +2 +2 +6/12 \(50\.0 %\) +6/12 \(50\.0 %\) +2 +0 +1\n")
         # Balayage. BUR -> PIC : à 0,02, T2 (0,03) remplace aussi : k = 2, 2 x 2 = 4 ; à 0,03 et au-delà T2
         # est sous la marge : 3 ; à 0,10, 0,10 ne dépasse plus : k = 0. BUR -> GAS : 3 partout.
         self.assertEqual(
@@ -649,8 +752,42 @@ class RegleEntiere(unittest.TestCase):
         self.assertEqual(
             [(propre[c]["desaccords"], propre[c]["paires"]) for c in ("unknown_value", "marge", "condition_e")],
             [(18, 36), (2, 6), (2, 6)])
-        # Sur bruit : BUR -> GAS et PIC -> GAS, remplacés dans T4, seule table à porter GAS.
-        self.assertEqual((total["acceptations_sur_bruit_effectives"], total["dont_sans_autre_table"]), (2, 2))
+        # BUR -> GAS et PIC -> GAS, remplacés dans T4, seule table à porter GAS : deux acceptations sans
+        # autre table, aucune sur bruit.
+        self.assertEqual((total["acceptations_sur_bruit_effectives"], total["acceptations_sans_autre_table"]), (0, 2))
+
+    def test_sur_bruit_quand_la_moyenne_des_autres_tables_est_nulle(self):
+        # Deux tables : PIC 0,40 / BUR 0,30 (gain 0,10, PIC en tête : remplace) et PIC 0,30 / BUR 0,30
+        # (G = 0, sous la marge). La moyenne des autres tables vaut exactement 0 : borne comprise, sur bruit.
+        d = Dossier(self)
+        d.ecrire("m1_9_a.jsonl", [
+            table_regle([((PIC,), 0.40), ((BUR,), 0.30)], recherche="B", engagements=[BUR], tirage=0),
+            table_regle([((PIC,), 0.30), ((BUR,), 0.30)], recherche="B", engagements=[BUR], tirage=1)])
+        _code, _sortie, _erreur, detail = d.lancer()
+        classe = detail["regle_entiere"]["classes"]["table_a_jour"]
+        self.assertEqual([(x["issues"], x["gains"], x["sur_bruit"]) for x in classe["scenarios"]],
+                         [(["remplace", "below_margin"], [0.1, 0.0], [True, False])])
+        total = classe["total"]
+        self.assertEqual((total["acceptations_sur_bruit_effectives"], total["acceptations_sans_autre_table"]), (1, 0))
+
+    def test_sur_bruit_et_sans_autre_table_ne_s_additionnent_pas(self):
+        # Trois tables, engagement BUR. BUR -> PIC : remplacé dans T1 (0,10), G = -0,05 et -0,01 ailleurs :
+        # moyenne -0,03 <= 0, sur bruit. BUR -> GAS : remplacé dans T3 (0,60, GAS en tête), GAS nulle part
+        # ailleurs : sans autre table. Un de chaque, jamais deux du même.
+        d = Dossier(self)
+        d.ecrire("m1_9_a.jsonl", [
+            table_regle([((PIC,), 0.40), ((BUR,), 0.30)], recherche="B", engagements=[BUR], tirage=0),
+            table_regle([((BUR,), 0.30), ((PIC,), 0.25)], recherche="B", engagements=[BUR], tirage=1),
+            table_regle([((GAS,), 0.90), ((BUR,), 0.30), ((PIC,), 0.29)], recherche="B", engagements=[BUR], tirage=2)])
+        _code, _sortie, _erreur, detail = d.lancer()
+        classe = detail["regle_entiere"]["classes"]["table_a_jour"]
+        par_couple = {(x["ancien"], x["nouveau"]): x for x in classe["scenarios"]}
+        self.assertEqual((par_couple[(BUR, PIC)]["sur_bruit"], par_couple[(BUR, PIC)]["sans_autre_table"]),
+                         ([True, False, False], [False] * 3))
+        self.assertEqual((par_couple[(BUR, GAS)]["sur_bruit"], par_couple[(BUR, GAS)]["sans_autre_table"]),
+                         ([False] * 3, [False, False, True]))
+        total = classe["total"]
+        self.assertEqual((total["acceptations_sur_bruit_effectives"], total["acceptations_sans_autre_table"]), (1, 1))
 
     def test_groupe_d_une_seule_table_non_rejoue(self):
         d = Dossier(self)
@@ -777,13 +914,97 @@ class EffetApparie(unittest.TestCase):
         self.assertEqual(effet["apparie"]["par_groupe"][0]["principaux"][0]["lecture"], "non conclusif")
 
     def test_sensibilite_sans_le_tirage_du_choix(self):
-        # L'engagement a été choisi sur la table A du tirage 0 : sans lui, delta = -0,04 ; -0,02 -> -0,03 aussi,
-        # mais sur 2 tirages ; avec lui -0,03 sur 3.
-        _sortie, effet = self.lancer((-0.02, -0.03, -0.01), (-0.08, -0.07, -0.03), choix=0)
+        # L'engagement a été choisi sur la table A du tirage 0. Avec lui, delta = -0,06 ; -0,04 ; -0,02 ; -0,02 :
+        # -0,035 sur 4 tirages ; sans lui, -0,04 ; -0,02 ; -0,02 : -0,08 / 3 sur 3 tirages.
+        _sortie, effet = self.lancer((-0.02, -0.03, -0.01, -0.01), (-0.08, -0.07, -0.03, -0.03), choix=0)
+        apparie = effet["apparie"]
+        self.assertAlmostEqual(apparie["entre_positions"]["effet"], -0.035)
+        sans = apparie["sensibilite_sans_le_tirage_du_choix"]
+        self.assertEqual((sans["tirages_du_choix_ecartes"], sans["positions"]), (1, 1))
+        self.assertAlmostEqual(sans["effet"], -0.08 / 3)
+        self.assertEqual((sans["couples_principaux_ecartes"], sans["positions_sans_couple_retenu"]), (0, 0))
+
+    def test_sensibilite_a_moins_de_trois_tirages_restants(self):
+        # Trois tirages dont celui du choix : il n'en reste que deux, le couple principal n'a plus d'erreur
+        # type et n'entre plus dans la synthèse -- la position n'a aucun couple retenu, et c'est dit.
+        sortie, effet = self.lancer((-0.02, -0.03, -0.01), (-0.08, -0.07, -0.03), choix=0)
         apparie = effet["apparie"]
         self.assertAlmostEqual(apparie["entre_positions"]["effet"], -0.04)  # (-0,06 - 0,04 - 0,02) / 3
+        self.assertEqual((apparie["entre_positions"]["couples_principaux_ecartes"],
+                          apparie["entre_positions"]["positions_sans_couple_retenu"]), (0, 0))
         sans = apparie["sensibilite_sans_le_tirage_du_choix"]
-        self.assertEqual((sans["tirages_du_choix_ecartes"], sans["positions"], sans["effet"]), (1, 1, -0.03))
+        self.assertEqual((sans["tirages_du_choix_ecartes"], sans["positions"], sans["effet"], sans["par_position"]),
+                         (1, 0, None, {}))
+        self.assertEqual((sans["couples_principaux_ecartes"], sans["positions_sans_couple_retenu"]), (1, 1))
+        self.assertIn("1 couple(s) principal(aux) écarté(s), estimé(s) sur moins de 3 tirages ; 1 position(s) sans aucun "
+                      "couple retenu", sortie)
+
+    def test_synthese_sur_les_couples_d_au_moins_trois_tirages(self):
+        # Cinq tirages, engagement BUR. (BUR, PIC) est dans les dix tables : delta = -0,01 cinq fois. (BUR, GAS)
+        # n'est que dans le tirage 0, en A (G = 0,10) et en B (G = 0,30) : delta = +0,20 sur un seul tirage.
+        # La moyenne de la position est celle du premier couple seul, -0,01 ; avec les deux, elle vaudrait +0,095.
+        d = Dossier(self)
+        lignes = []
+        for i in range(5):
+            for recherche, pic, gas in (("A", 0.50, 0.60), ("B", 0.49, 0.80)):
+                actions = [((BUR,), 0.50), ((PIC,), pic)] + ([((GAS,), gas)] if i == 0 else [])
+                lignes.append(releve(actions, {a[0]: v for a, v in actions}, tirage=i, recherche=recherche,
+                                     engagements=[BUR] if recherche == "B" else []))
+        d.ecrire("m1_9_a.jsonl", lignes)
+        _code, sortie, _erreur, detail = d.lancer()
+        apparie = detail["effet_engagement"]["apparie"]
+        self.assertEqual([(c["nouveau"], c["n"], c["effet"]) for c in apparie["par_groupe"][0]["principaux"]],
+                         [(GAS, 1, 0.2), (PIC, 5, -0.01)])
+        synthese = apparie["entre_positions"]
+        self.assertEqual((synthese["positions"], synthese["effet"]), (1, -0.01))
+        self.assertEqual((synthese["couples_principaux_ecartes"], synthese["positions_sans_couple_retenu"]), (1, 0))
+        self.assertNotIn("couples_principaux_du_seul_tirage_du_choix", synthese)
+        self.assertEqual(synthese["par_position"], {"9 S1901M FRANCE": {
+            "couples_principaux": 1, "couples_principaux_ecartes": 1, "effet": -0.01}})
+        self.assertEqual(synthese["tirages_min_par_couple"], bruit.MIN_TIRAGES_ERREUR_TYPE)
+        self.assertIn("1 couple(s) principal(aux) écarté(s), estimé(s) sur moins de 3 tirages ; 0 position(s) sans aucun "
+                      "couple retenu", sortie)
+
+    def test_couple_du_seul_tirage_du_choix(self):
+        # Le même cas, l'engagement ayant été choisi au tirage 0, le seul à porter GAS. Sans ce tirage,
+        # (BUR, GAS) n'a plus aucun tirage : il n'est pas « écarté pour moins de 3 tirages », il est sorti avec
+        # le tirage, et compté à part. (BUR, PIC) garde 4 tirages : -0,01.
+        d = Dossier(self)
+        lignes = []
+        for i in range(5):
+            for recherche, pic, gas in (("A", 0.50, 0.60), ("B", 0.49, 0.80)):
+                actions = [((BUR,), 0.50), ((PIC,), pic)] + ([((GAS,), gas)] if i == 0 else [])
+                lignes.append(releve(actions, {a[0]: v for a, v in actions}, tirage=i, recherche=recherche,
+                                     engagements=[BUR] if recherche == "B" else [], choix=0 if recherche == "B" else None))
+        d.ecrire("m1_9_a.jsonl", lignes)
+        _code, sortie, _erreur, detail = d.lancer()
+        apparie = detail["effet_engagement"]["apparie"]
+        self.assertEqual(apparie["entre_positions"]["couples_principaux_ecartes"], 1)
+        sans = apparie["sensibilite_sans_le_tirage_du_choix"]
+        self.assertEqual((sans["tirages_du_choix_ecartes"], sans["positions"], sans["effet"]), (1, 1, -0.01))
+        self.assertEqual((sans["couples_principaux_ecartes"], sans["couples_principaux_du_seul_tirage_du_choix"]), (0, 1))
+        self.assertIn("0 position(s) sans aucun couple retenu ; 1 couple(s) principal(aux) du seul tirage du choix, "
+                      "sorti(s) avec lui", sortie)
+
+    def test_synthese_entre_positions(self):
+        # Trois positions, cinq tirages chacune. ENGLAND : un couple principal, effet 0,01. FRANCE : deux,
+        # 0,02 et 0,04 -> moyenne 0,03 (leur somme serait 0,06). GERMANY : un, 0,05.
+        #   moyennes 0,01 ; 0,03 ; 0,05 -> moyenne 0,03, s = racine((0,02^2 + 0 + 0,02^2) / 2) = 0,02,
+        #   ET = 0,02 / racine(3) = 0,0115470, t = 2,598076,
+        #   IC = 0,03 -/+ 4,302653 x 0,0115470 = [-0,019683 ; 0,079683].
+        def groupe(position, *effets):
+            return {"position": position, "principaux": [{"effet": e, "n": 5} for e in effets]}
+
+        synthese = bruit._entre_positions([
+            groupe("9 S1901M ENGLAND", 0.01), groupe("9 S1901M FRANCE", 0.02, 0.04), groupe("9 S1901M GERMANY", 0.05)])
+        self.assertEqual({q: (x["couples_principaux"], x["effet"]) for q, x in synthese["par_position"].items()},
+                         {"9 S1901M ENGLAND": (1, 0.01), "9 S1901M FRANCE": (2, 0.03), "9 S1901M GERMANY": (1, 0.05)})
+        self.assertEqual((synthese["positions"], synthese["effet"], synthese["quantile"]), (3, 0.03, 4.302653))
+        for cle, attendu in (("ecart_type", 0.02), ("erreur_type", 0.0115470), ("t", 2.598076)):
+            self.assertAlmostEqual(synthese[cle], attendu, delta=1e-6, msg=cle)
+        self.assertAlmostEqual(synthese["ic95"][0], -0.019683, delta=1e-6)
+        self.assertAlmostEqual(synthese["ic95"][1], 0.079683, delta=1e-6)
+        self.assertEqual((synthese["couples_principaux_ecartes"], synthese["positions_sans_couple_retenu"]), (0, 0))
 
     def test_table_sans_tirage_apparie(self):
         # Une table B sans recherche A de même tirage dans le même fichier n'entre pas dans l'estimateur.
@@ -919,6 +1140,80 @@ class Dispersion(unittest.TestCase):
         self.assertEqual((jumelles["paires_jumelles"], jumelles["paires_examinees"]), (2, 4))
         self.assertIn("  MISE EN GARDE : 2 paire(s) de tables jumelles", sortie)
         self.assertIn("2 paire(s) de tables jumelles", " ".join(detail["verdict"]["recherches_a"]["avertissements"]))
+        # Le fichier b a deux lambda distincts (0,12 et 0,13) : il n'est pas jumeau d'un bout à l'autre.
+        self.assertEqual(jumelles["fichiers_entierement_jumeaux_par_lambda"], [])
+        self.assertNotIn("lambda_constant", jumelles)
+        self.assertIn("le contrôle par search.lambda suppose un lambda dynamique, différent d'un tirage à l'autre.", sortie)
+        self.assertNotIn("ont le même search.lambda", sortie)
+
+    def test_lambda_constant_et_valeurs_differentes(self):
+        # Trois tables d'un fichier aux valeurs toutes différentes, au même lambda : le lambda dynamique est
+        # mis en cache par état d'agent, un état réutilisé d'un tirage à l'autre donne exactement cela. Les
+        # trois paires sont jumelles, la mise en garde nomme le fichier et les deux causes possibles, et le
+        # verdict n'est pas concluant.
+        d = Dossier(self)
+        d.ecrire("m1_9_a.jsonl", [deux_ordres(g, tirage=i, search={"lambda": 0.12}) for i, g in enumerate((0.10, 0.11, 0.12))])
+        _code, sortie, _erreur, detail = d.lancer()
+        jumelles = detail["dispersion"]["tables_jumelles"]
+        self.assertEqual((jumelles["paires_jumelles"], jumelles["paires_examinees"]), (3, 3))
+        self.assertEqual((jumelles["order_values_identiques"], len(jumelles["lambda_identique"])), ([], 3))
+        self.assertEqual(jumelles["fichiers_entierement_jumeaux_par_lambda"], ["m1_9_a.jsonl"])
+        self.assertEqual(len(detail["mises_en_garde"]), 1)
+        self.assertIn("3 paire(s) de tables jumelles (même fichier, même type ; order_values identiques : 0, search.lambda "
+                      "identique : 3)", detail["mises_en_garde"][0])
+        self.assertTrue(detail["mises_en_garde"][0].endswith(
+            " ; toutes les paires de m1_9_a.jsonl ont le même search.lambda : état partagé entre tirages, ou lambda non "
+            "dynamique dans la configuration"), detail["mises_en_garde"][0])
+        self.assertIn("  MISE EN GARDE : 3 paire(s) de tables jumelles", sortie)
+        verdict = detail["verdict"]["recherches_a"]
+        self.assertEqual((verdict["verdict"], verdict["concluant"]), ("non concluant", False))
+        self.assertIn(detail["mises_en_garde"][0], verdict["avertissements"])
+        self.assertEqual(len(verdict["avertissements"]), 3)  # 6 observations, 1 position, et les jumelles
+
+    def test_lambda_constant_par_type(self):
+        # Les recherches A ont un lambda, les B un autre, chacun constant d'un tirage à l'autre : les paires
+        # se font dans un type, toutes sont jumelles -- 3 en A, 3 en B --, et le fichier est nommé.
+        d = Dossier(self)
+        d.ecrire("m1_9_a.jsonl", [deux_ordres(g, tirage=i, search={"lambda": 0.12}) for i, g in enumerate((0.10, 0.11, 0.12))] + [
+            deux_ordres(g, tirage=i, recherche="B", engagements=[BUR], search={"lambda": 0.15})
+            for i, g in enumerate((0.20, 0.21, 0.22))])
+        _code, sortie, _erreur, detail = d.lancer()
+        jumelles = detail["dispersion"]["tables_jumelles"]
+        self.assertEqual((jumelles["paires_jumelles"], jumelles["paires_examinees"], len(jumelles["lambda_identique"])),
+                         (6, 6, 6))
+        self.assertEqual(jumelles["fichiers_entierement_jumeaux_par_lambda"], ["m1_9_a.jsonl"])
+        self.assertIn("  MISE EN GARDE : 6 paire(s) de tables jumelles", sortie)
+        self.assertEqual(detail["verdict"]["recherches_a"]["verdict"], "non concluant")
+
+    def test_engagements_differents_d_un_fichier_a_l_autre(self):
+        # La même position dans deux fichiers : les recherches B du premier ont figé BUR, celles du second PIC.
+        # Deux groupes B de deux tables, aucun réparti sur deux fichiers : pas de décomposition du type B ;
+        # le constat est rendu, une ligne pour la position, avec les deux engagements.
+        d = Dossier(self)
+        for nom, engagement in (("m1_9_a.jsonl", BUR), ("m1_9_b.jsonl", PIC)):
+            d.ecrire(nom, [deux_ordres(g, tirage=i) for i, g in enumerate((0.10, 0.12))] + [
+                deux_ordres(g, tirage=i, recherche="B", engagements=[engagement]) for i, g in enumerate((0.11, 0.13))])
+        _code, sortie, _erreur, detail = d.lancer()
+        dispersions = detail["dispersion"]
+        self.assertEqual(dispersions["engagements_differents_entre_fichiers"], [{
+            "position": "9 S1901M FRANCE", "recherche": "B",
+            "par_fichier": [{"fichier": "m1_9_a.jsonl", "engagements": [BUR], "tables": 2},
+                            {"fichier": "m1_9_b.jsonl", "engagements": [PIC], "tables": 2}]}])
+        self.assertEqual([(g["recherche"], bool(g["decomposition"])) for g in dispersions["par_groupe"]],
+                         [("A", True), ("B", False), ("B", False)])
+        self.assertEqual(sortie.count("aux engagements différents d'un fichier à l'autre"), 1)
+        self.assertIn("  position 9 S1901M FRANCE : recherches B aux engagements différents d'un fichier à l'autre -- "
+                      "A PAR - BUR (m1_9_a.jsonl, 2 tables) ; A PAR - PIC (m1_9_b.jsonl, 2 tables) ; elles forment des "
+                      "groupes distincts, pas de test d'indépendance sur le type B", sortie)
+        # Un constat, pas une mise en garde : le verdict n'en reçoit aucun avertissement.
+        self.assertEqual(detail["mises_en_garde"], [])
+        self.assertNotIn("engagements différents", " ".join(detail["verdict"]["recherches_a"]["avertissements"]))
+
+    def test_memes_engagements_dans_les_deux_fichiers(self):
+        # Le même engagement figé par les deux lancements : rien à signaler, et le type B est décomposé.
+        _sortie, detail = self.lancer((0.10, 0.12), (0.20, 0.22), recherche="B", engagements=[BUR])
+        self.assertEqual(detail["dispersion"]["engagements_differents_entre_fichiers"], [])
+        self.assertNotIn("aux engagements différents", _sortie)
 
 
 class CritereSurLesRecherchesA(unittest.TestCase):
