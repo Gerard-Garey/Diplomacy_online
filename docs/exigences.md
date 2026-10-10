@@ -20,11 +20,11 @@ Ce document fixe ce que le projet doit faire ; `CLAUDE.md` renvoie ici pour le f
 
 2.4. **Le mensonge est permis, mais distingué.** Un bot peut bluffer dans un message. Seuls ses engagements sincères sont transmis au moteur, de sorte qu'un bluff ne puisse pas devenir vrai par ce canal.
 
-2.5. **Une seule parole par unité.** Deux engagements sincères contraires sur une même unité ne coexistent pas ; le second ne remplace le premier que si le plan qui le réalise vaut nettement plus.
+2.5. **Une seule parole par unité.** Deux engagements sincères contraires sur une même unité ne coexistent pas ; le second ne remplace le premier que si le bot déclare la rupture, si le plan qui le réalise vaut nettement plus et si le moteur le jouerait ; sinon le premier tient et le second est un bluff.
 
 2.6. **Un ordre impossible ou illégal n'est jamais une promesse**, ni pour un bot ni pour le joueur.
 
-2.7. **Mémoire des promesses du joueur.** Chaque bot tient le bilan des promesses que le joueur lui a faites et tenues ou rompues, et sa confiance en dépend.
+2.7. **Mémoire des promesses du joueur.** Chaque bot tient le bilan des promesses que le joueur lui a faites et tenues ou rompues, et sa confiance en dépend. Chaque bot tient aussi le bilan de ses propres promesses, et ne le rappelle à Claude que pour l'interlocuteur courant.
 
 2.8. **Cloisonnement.** Un bot n'a accès qu'à ses propres conversations ; les bots ne se parlent pas entre eux ; un bot n'ouvre jamais une conversation.
 
@@ -48,7 +48,7 @@ Ce document fixe ce que le projet doit faire ; `CLAUDE.md` renvoie ici pour le f
 
 4.2. **Clef en main** : `git clone`, `./install.sh`, `./demarrer.sh`, sur Ubuntu avec GPU NVIDIA d'au moins 8 Go, Docker et `nvidia-container-toolkit`. L'image Cicero se construit depuis les sources, sans rien reprendre d'une autre machine.
 
-4.3. Aucune donnée locale dans le dépôt : ni jeton, ni base de données, ni comptes, ni état de partie, ni chemin personnel. La base se crée vide au premier démarrage.
+4.3. Aucune donnée locale dans le dépôt : ni jeton, ni base de données, ni comptes, ni chemin personnel, ni état d'exécution d'une instance (journaux, fichiers d'état des conteneurs, messages, parties). Seule exception, écrite dans l'ADR 0006 : un jeu d'essai figé, tiré d'une partie 100 % bots et réduit à l'historique des ordres et aux tables du moteur, versionné dans le seul dossier `tests/reference/` avec son manifeste, et contrôlé par `tests/verifier.sh` (clés en liste blanche, aucun texte de message, plafond de taille). La base se crée vide au premier démarrage.
 
 4.4. `install.sh` est relançable et s'arrête, sur un prérequis manquant, avec un message qui dit quoi faire.
 
@@ -60,7 +60,7 @@ Ce document fixe ce que le projet doit faire ; `CLAUDE.md` renvoie ici pour le f
 
 5.2. Un message de bot est toujours un texte de joueur : jamais de sortie brute de modèle, de JSON ni de mention d'IA ; il est écrit dans la langue du message reçu.
 
-5.3. Un message n'est jamais envoyé deux fois, y compris après le redémarrage d'un conteneur.
+5.3. Un message n'est jamais renvoyé sur la foi d'une erreur : un envoi incertain est d'abord relu dans les messages de la partie, y compris après le redémarrage d'un conteneur ; un renvoi après deux relectures négatives peut encore doubler un message que le site aurait stocké avec retard (ADR 0005, écart 3).
 
 5.4. Une phase se résout sans action d'administration dès que tous les joueurs actifs sont prêts.
 

@@ -25,6 +25,9 @@ import json
 import sys
 from pathlib import Path
 
+# Avant tout chargement : commun.charger lit des fichiers de cicero/overlay, où un .pyc
+# passerait pour un fichier d'overlay (outils/exporter_patchs.sh --verifier, install.sh ; #27).
+sys.dont_write_bytecode = True
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import commun  # noqa: E402
 

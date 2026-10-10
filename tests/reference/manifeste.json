@@ -1,0 +1,104 @@
+{
+ "partie": {
+  "numero": 3,
+  "creee_le": "2026-10-03",
+  "nature": "100 % bots"
+ },
+ "capture": {
+  "date": "2026-10-10",
+  "sha_code": "c411391d2e077718e07f6e8ed22a012433f47539",
+  "image": "sha256:3fd605df01bd87b7c2a6d71058aa4d4966e2e36330540464febd18b2d42ddb88",
+  "commande": "capture_reference.py commandes 3 --score sos --minutes-de-phase 4320"
+ },
+ "format": 1,
+ "phases": [
+  "S1901M",
+  "F1901M",
+  "S1902M",
+  "F1902M",
+  "S1903M",
+  "F1903M"
+ ],
+ "puissances": [
+  "AUSTRIA",
+  "ENGLAND",
+  "FRANCE",
+  "GERMANY",
+  "ITALY",
+  "RUSSIA",
+  "TURKEY"
+ ],
+ "fichiers": [
+  {
+   "chemin": "attendus/F1901M.json",
+   "octets": 28393,
+   "sha256": "1f52f3a761cfecde9daeb5f067cdf9f484414a9899cfcf5ff6928339282a2647"
+  },
+  {
+   "chemin": "attendus/F1902M.json",
+   "octets": 33237,
+   "sha256": "1b8653c307ebeab59e6042f6c334ef3fc38ece71989ac9d77eea11408445757d"
+  },
+  {
+   "chemin": "attendus/F1903M.json",
+   "octets": 33482,
+   "sha256": "0bd4c864094c3c474601789d6b99978dcc1f0810e13ee1136063b26a341e463b"
+  },
+  {
+   "chemin": "attendus/S1901M.json",
+   "octets": 26202,
+   "sha256": "93fe46a9a487f43b4f7dffee2dd30ec3d0631be46c73b4138988a14728d6c4c1"
+  },
+  {
+   "chemin": "attendus/S1902M.json",
+   "octets": 32390,
+   "sha256": "e0d8255ac156edece32b21258d79bc40816ba62b4f3d7b7af3e3e69571942e3b"
+  },
+  {
+   "chemin": "attendus/S1903M.json",
+   "octets": 34197,
+   "sha256": "1f9eb0c8fa6e6f11b67379792b4dedc45c7b811d35a6952f0722363794bc6cbc"
+  },
+  {
+   "chemin": "historique.json",
+   "octets": 4023,
+   "sha256": "3b28e36777c8968ecfc1c003cda8537ed3d3cece5bd49a318b0370b7c737b1ae"
+  },
+  {
+   "chemin": "tables/F1901M.json",
+   "octets": 25262,
+   "sha256": "ad5716e03ad3d70697b1b6770ef5b8f05cd87cd86f680b32f011aded7df5a787"
+  },
+  {
+   "chemin": "tables/F1902M.json",
+   "octets": 39865,
+   "sha256": "bb1a440416b056c6e85e9fa517a162ff3690316c5a49d4b87609608318aa00ca"
+  },
+  {
+   "chemin": "tables/F1903M.json",
+   "octets": 41174,
+   "sha256": "8d79b3df895225976da634d2aca1d276ea7781b9e29966c99a67e7ac626976be"
+  },
+  {
+   "chemin": "tables/S1901M.json",
+   "octets": 24628,
+   "sha256": "a664a6e0f8e8db68a6f49fe38339f3586dc0c7cfa32cf51702df1282e54b26cd"
+  },
+  {
+   "chemin": "tables/S1902M.json",
+   "octets": 39290,
+   "sha256": "f8c5b36fb3e0657dc3f72a4de444bc54813d1bc28f3ac974a7822695770026e5"
+  },
+  {
+   "chemin": "tables/S1903M.json",
+   "octets": 41458,
+   "sha256": "3447eb7959f8406eced0e7c97c57a8e995d7d3cb07b0e40a6ea693d8187350f4"
+  }
+ ],
+ "taille_octets": 403601,
+ "attendus": {
+  "date": "2026-10-10",
+  "sha_code": "068e212bcda8639485d2ea0c9bae90265b332da2",
+  "commande": "python3 tests/reference_couche_d.py --jeu <dossier> --generer"
+ }
+}

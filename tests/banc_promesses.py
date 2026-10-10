@@ -37,6 +37,10 @@ from pathlib import Path
 from typing import Dict, Tuple
 from unittest import mock
 
+# Avant tout chargement : ni __pycache__ dans tests/, ni .pyc sous cicero/overlay, que
+# outils/exporter_patchs.sh --verifier et install.sh prendraient pour des fichiers d'overlay (#27).
+sys.dont_write_bytecode = True
+
 import faux_site
 
 RACINE = Path(__file__).resolve().parents[1]
@@ -145,11 +149,16 @@ class FauxJeu:
     passe à la suivante. Comme dans une vraie partie, get_all_phases rend aussi
     la phase courante, sans ordres. Les unités ne bougent pas d'une phase à
     l'autre : les ordres légaux restent ORDRES_LEGAUX.
+
+    `puissance`, `ordres_legaux` ({unité: [ordres]}) et `phase` : une autre
+    position que celle du banc (tests/reference_couche_d.py, une table du jeu d'essai).
     """
 
-    def __init__(self):
+    def __init__(self, puissance="FRANCE", ordres_legaux=None, phase=PHASE):
         self.messages = {}
-        self.phase = PHASE
+        self.puissance = puissance
+        self.ordres_legaux = ORDRES_LEGAUX if ordres_legaux is None else ordres_legaux
+        self.phase = phase
         self.resolues = []
 
     def get_current_phase(self):
@@ -170,10 +179,10 @@ class FauxJeu:
         self.phase = suivante
 
     def get_orderable_locations(self):
-        return {"FRANCE": list(ORDRES_LEGAUX)}
+        return {self.puissance: list(self.ordres_legaux)}
 
     def get_all_possible_orders(self):
-        return ORDRES_LEGAUX
+        return self.ordres_legaux
 
 
 def plans(*valeurs):
@@ -446,11 +455,16 @@ class Banc:
     vrai load_plans) : voir entree() et entree_ancienne().
     legal_commitments et engine_head_action sont les vraies fonctions, sur la
     position de FauxJeu.
+
+    `jeu` : un FauxJeu d'une autre position (puissance, ordres légaux, phase) ;
+    le bot joue alors sa puissance, face aux `interlocuteurs`.
     """
 
-    def __init__(self, entree_plans=None):
+    def __init__(self, entree_plans=None, jeu=None, interlocuteurs=("GERMANY", "ENGLAND")):
         self.entree_plans = entree_plans
-        self.jeu = FauxJeu()
+        self.jeu = FauxJeu() if jeu is None else jeu
+        self.puissance = self.jeu.puissance
+        self.interlocuteurs = tuple(interlocuteurs)
         self.retours = []  # retours successifs de _reject_contradictions
         self.sincere = []
         self.betray = None  # label de trahison de la réponse ; None : champ absent
@@ -469,24 +483,26 @@ class Banc:
         self.fichier_engagements = logs / "pseudo_commitments.json"
         self.fichier_plans = logs / "current_plans.json"
         if self.entree_plans is not None:
-            # Le même plan pour les deux phases du banc.
+            # Le même plan pour les deux phases du banc (et la phase du jeu, si elle est autre).
             self.fichier_plans.write_text(json.dumps({str(PARTIE): {
-                phase: {"FRANCE": self.entree_plans} for phase in (PHASE, PHASE_SUIVANTE)
+                phase: {self.puissance: self.entree_plans}
+                for phase in dict.fromkeys((PHASE, PHASE_SUIVANTE, self.jeu.phase))
             }}))
 
         # Les deux appels à Claude se reconnaissent à leur consigne système. Un
         # appel qui n'est ni l'un ni l'autre est noté, et message() lève : lever
         # ici ne suffirait pas, le bot rattrape les exceptions de ces appels.
         extractions = {
-            bot.COMMITMENT_SYSTEM_PROMPT.format(power="FRANCE", other=autre)
-            for autre in ("GERMANY", "ENGLAND")
+            bot.COMMITMENT_SYSTEM_PROMPT.format(power=self.puissance, other=autre)
+            for autre in self.interlocuteurs
         }
+        puissances = (self.puissance,) + self.interlocuteurs
 
         def claude(commande, **kwargs):
             consigne = commande[commande.index("--system-prompt") + 1]
             if consigne in extractions:
                 reponse = {"mine": [], "theirs": []}
-            elif consigne.startswith("You are playing FRANCE"):
+            elif consigne.startswith("You are playing %s " % self.puissance):
                 self.consignes.append(consigne)
                 reponse = {"reply": self.reply, "sincere": self.sincere}
                 if self.betray is not None:
@@ -507,8 +523,8 @@ class Banc:
             "STATE_FILE": self.fichier_etat,
             "COMMITMENTS_FILE": self.fichier_engagements,
             "API_KEYS": ["bot1"],
-            "COUNTRY_ID_TO_POWER_OR_ALL": {1: "FRANCE", 2: "GERMANY", 3: "ENGLAND"},
-            "POWER_TO_ID": {"FRANCE": 1, "GERMANY": 2, "ENGLAND": 3},
+            "COUNTRY_ID_TO_POWER_OR_ALL": {i: p for i, p in enumerate(puissances, 1)},
+            "POWER_TO_ID": {p: i for i, p in enumerate(puissances, 1)},
             "get_active_games": lambda cle: [{"gameID": PARTIE, "countryID": 1, "variantID": 1}],
             "get_status_json": self.site.statut,
             "webdip_state_to_game": lambda status: self.jeu,
@@ -529,7 +545,7 @@ class Banc:
         return self.pile.__exit__(*exc)
 
     def message(self, expediteur, sincere, betray=None, reply="entendu"):
-        """`expediteur` écrit à la France, qui répond avec la liste `sincere` ; rend le journal.
+        """`expediteur` écrit à la France (la puissance du jeu), qui répond avec la liste `sincere` ; rend le journal.
 
         `betray` est le label de trahison de la réponse (#17), tel que Claude
         l'écrirait : None laisse le champ absent, toute autre valeur est rendue
@@ -570,7 +586,7 @@ class Banc:
         """Dépose un message d'`expediteur` pour la France et règle la réponse de Claude, sans cycle."""
         self.horloge += 60
         self.jeu.messages[self.horloge] = {
-            "sender": expediteur, "recipient": "FRANCE", "message": "bonjour",
+            "sender": expediteur, "recipient": self.puissance, "message": "bonjour",
             "phase": self.jeu.phase,
         }
         self.sincere = list(sincere)
@@ -628,7 +644,7 @@ class Banc:
         if not self.fichier_engagements.exists():
             return []
         donnees = json.loads(self.fichier_engagements.read_text())
-        return donnees.get(str(PARTIE), {}).get(self.jeu.phase, {}).get("FRANCE", [])
+        return donnees.get(str(PARTIE), {}).get(self.jeu.phase, {}).get(self.puissance, [])
 
 
 def entree(plans_exportes, order_values=None, candidates=None, search=None):
