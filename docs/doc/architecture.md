@@ -68,9 +68,12 @@ Les ordres sincères suivent ce chemin :
 |---|---|---|
 | Normalisation | `normalize_order_spacing` (`fairdiplomacy/utils/orders.py`) | `F TRI-ALB` devient `F TRI - ALB` |
 | Filtre de légalité | `legal_commitments` (`fairdiplomacy/utils/pseudo_commitments.py`) | Un ordre impossible pour cette puissance n'est jamais retenu |
-| Cohérence entre interlocuteurs | `_reject_contradictions` (`claude_dialogue_bot.py`) | Deux promesses contraires sur une même unité : la première tient, sauf si le plan qui réalise la seconde vaut nettement plus (marge `COMMITMENT_SWITCH_MARGIN`) ; l'autre devient un bluff. *Écart connu entre ce texte et le code, voir [issue #3](https://github.com/Gerard-Garey/Diplomacy_online/issues/3).* |
+| Cohérence dans un message | `_reject_contradictions` (`claude_dialogue_bot.py:333`) | Deux ordres distincts pour une même unité dans la liste `sincere` d'un même message : aucun des deux n'est retenu, et la promesse déjà faite pour cette unité, s'il y en a une, reste telle quelle (ligne de journal `[double-deal]`). Le même ordre écrit deux fois compte une fois |
+| Cohérence entre interlocuteurs | `_reject_contradictions` (`claude_dialogue_bot.py`) | Deux promesses contraires sur une même unité : la première tient, sauf si le plan qui réalise la seconde vaut nettement plus (marge `COMMITMENT_SWITCH_MARGIN`) ; l'autre devient un bluff. Une promesse abandonnée est retirée chez toutes les puissances qui la détenaient, et non chez une seule. *Écart connu entre ce texte et le code, voir [issue #3](https://github.com/Gerard-Garey/Diplomacy_online/issues/3).* |
 | Injection | `build_extra_plausible_actions`, appelée depuis `get_orders` | L'action promise est ajoutée aux candidats par le mécanisme d'amont `extra_plausible_orders` : elle ne peut pas être évincée et reçoit une probabilité calculée par le modèle |
 | Renfort | `apply_commitments_to_policy` | Sa probabilité est multipliée, sous plafond. *Écart connu entre ce texte et le code, voir [issue #4](https://github.com/Gerard-Garey/Diplomacy_online/issues/4).* |
+
+Ces règles maintiennent un invariant : **au plus un engagement sincère par unité**, tous interlocuteurs confondus (`_reject_contradictions`, `claude_dialogue_bot.py:255`). Le moteur le contrôle une seconde fois à la lecture du fichier : si `pseudo_commitments.json` portait malgré tout deux ordres distincts pour une unité, `resolve_commitment_conflicts` (`fairdiplomacy/utils/pseudo_commitments.py:133`) les écarterait tous les deux et s'en remettrait au plan pour cette unité.
 
 L'action promise est ensuite **évaluée comme les autres** : si sa valeur est nettement inférieure, elle n'est pas jouée. Une promesse ne peut donc pas faire jouer un bot contre son intérêt ; en contrepartie, elle n'est pas garantie.
 
