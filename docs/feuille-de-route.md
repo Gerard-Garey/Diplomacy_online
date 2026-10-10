@@ -4,7 +4,19 @@ Tenue par `architect`, après chaque série de PR fusionnées. Chaque mise à jo
 
 ## 1. Branche de travail en cours
 
-Mise à jour du 2026-10-10 (sixième, après la revue finale d'`expert-cicero` et d'`audit`) — `main` : `7b9ec68` (fusion de la PR #19, Dependabot) ; `claude/promesses` : `1a0f4a1` (documentation de fond corrigée après la validation d'`expert-cicero`), PR brouillon #16. Mises à jour précédentes : 2026-10-03, `2d5294f`, `41e009f` (sur `7372dcf`), `1256927` (sur `0fdb5bf`), `bddce95` (sur `7b7ce70`), puis 2026-10-10, `9105c96` (sur `ab872ab`).
+Mise à jour du 2026-10-10 (septième : point d'étape après la fusion de la PR #16) — `main` : `449f02d` (commit de fusion de la PR #16, tête de branche `3dde397`). **Aucune branche de travail n'est ouverte** (`gh pr list --state open` : aucune PR). La branche suivante est **proposée** au § 2.1 ; son périmètre est à fixer par le mainteneur.
+
+**Bilan de `claude/promesses` (close, fusionnée le 2026-10-10, M51).**
+
+- **Livré et fermé** (`gh issue list --state all`, 2026-10-10 : #2, #3, #4, #5, #17 `CLOSED`) : deux ordres contraires d'un même message, aucun retenu (#2) ; trahison déclarée — label `betray`, marge de 0,05 en valeur, condition (e), mémoire des promesses du bot, index `order_values`, clés `candidates` et `search` de `current_plans.json` (#17, qui implémente #3 ; ADR 0004) ; renfort de probabilité gradué, fonction pure commune au moteur et au bot de dialogue (#4) ; écriture atomique, bot muet sur fichier illisible, journal d'envoi `pending_send` (#5 ; ADR 0005). Banc déterministe dans la CI (89 + 172 tests à `3dde397`, passation de la PR #16), scripts de mesure versionnés (`tests/mesure/`), documentation de fond passée une fois et validée par les deux experts.
+- **Livré, non fermé** : #12 — script de création d'une partie 100 % bots (`e0624e6`), partie `gameID=3` créée et mise en pause ; l'issue reste ouverte (M49), deux critères n'étant pas mesurés : A3 (une partie ordinaire se crée et se joue comme avant) et « moins de sept bots : échec propre, rien en base ».
+- **Reste, porté hors de la branche** : critère (c) de #17 non tenu sur 1 tirage sur 20, accepté pour la branche (M50), suite dans #24 ; dix constats de `/code-review` et sept de l'audit final, aucun corrigé dans la branche, portés par #24 à #29 et par le complément de #22 (M52) ; marge de 0,05 à réexaminer après #26 ; reformulations des exigences 2.5, 2.7, 5.3 et de `CLAUDE.md` (M53) ; référence de non-régression fonctionnelle, toujours sans issue (§ 2.1).
+- **Jamais mesuré** (passation de la PR #16, § 4) : Claude sur une autre position, une autre puissance ou une demande négative ; l'ordre réellement joué après une promesse ; le renfort au printemps 1901 (0,07 à 0,16 calculé, non observé) ; le statut de l'API pour un message de plus de 65 000 octets ; un message stocké avec retard après deux relectures négatives.
+- **État du poste** (passation, non remesuré par `architect`) : pile en service (M54) sur l'image construite à `afc0dfe` ; partie 3 en pause, source des positions rejouées ; un message posté dans cette partie déclenche des appels à Claude, y compris entre bots (#14) ; compteur des appels de `claude_avant_apres.py` au plafond de 160.
+
+Les § 1.1 à 1.6 ci-dessous décrivent `claude/promesses` et sont **conservés pour l'historique** ; le § 1.7 est tenu à jour.
+
+Mise à jour précédente du 2026-10-10 (sixième, après la revue finale d'`expert-cicero` et d'`audit`) — `main` : `7b9ec68` (fusion de la PR #19, Dependabot) ; `claude/promesses` : `1a0f4a1` (documentation de fond corrigée après la validation d'`expert-cicero`), PR brouillon #16. Mises à jour précédentes : 2026-10-03, `2d5294f`, `41e009f` (sur `7372dcf`), `1256927` (sur `0fdb5bf`), `bddce95` (sur `7b7ce70`), puis 2026-10-10, `9105c96` (sur `ab872ab`).
 
 **État au 2026-10-10, après la revue finale.** Code de fond inchangé depuis le visa (`d353257`, `b995620` ; les commits postérieurs à `ab872ab` sont tous `docs:` ou `claude:`). Documentation de fond passée (`8404c10`, `4af70d6`, `66e1d43`, puis `d85d6d2` et `1a0f4a1` après la validation de fond). Revue finale : `expert-cicero` et `audit` passés ; leurs corrections de texte sont portées dans les ADR 0004 et 0005 (mentions « corrigé le 2026-10-10 »), le glossaire et la présente mise à jour ; leurs constats sans correction dans la branche sont au § 1.7 (points 7 à 13) et au § 3 (« Constats sans issue »). Batteries à la présente mise à jour : `bash tests/verifier.sh` vert (sortie au compte rendu d'`architect`) ; `outils/exporter_patchs.sh --verifier` : voir § 1.7, point 7. Reste avant la sortie du brouillon : les décisions du § 1.7, dont le point 13 (`Closes #12`), et `/code-review`.
 
@@ -12,10 +24,10 @@ Mise à jour du 2026-10-10 (sixième, après la revue finale d'`expert-cicero` e
 
 **État au 2026-10-03** (conservé pour l'historique). Le code de fond était écrit et audité, dans l'arbre de travail, non commité (M40), sauvegardé dans `amont/sauvegardes/` ; corrections finales M32 à M35 ; mesures sur la pile autorisées (M38), protocole au § 1.3.
 
-- **Branche** : `claude/promesses` — PR #16, brouillon.
+- **Branche** : `claude/promesses` — PR #16, fusionnée le 2026-10-10 (`449f02d`).
 - **Objet** : logique des promesses. Périmètre fixé par le mainteneur le 2026-10-03 (M10, M11), étendu le même jour sur son accord : trahison retirée chez tous les destinataires (avec #2, M19), réponse vide et sourdine (avec #5, M17), issue #17 (M24), qui remplace la tâche T5 telle que spécifiée et implémente #3 ; #3 reste dans le périmètre et est fermée par le même travail.
 - **Périmètre** (fermé : six issues, #12, #2, #3, #4, #5, #17) :
-  - [x] T1 — option « partie 100 % bots » — #12 : script en ligne de commande (`e0624e6`) ; partie `gameID=3` créée le 2026-10-03, elle avance seule ; critères d'exécution A1 à A5 en cours de levée (dans l'issue) — au 2026-10-10, A3 et le critère « moins de sept bots » de l'issue ne sont pas mesurés : § 1.7, point 13
+  - [ ] T1 — option « partie 100 % bots » — #12, **non close** (M49) : script en ligne de commande (`e0624e6`) ; partie `gameID=3` créée le 2026-10-03, elle avance seule ; critères d'exécution A1 à A5 en cours de levée (dans l'issue) — au 2026-10-10, A3 et le critère « moins de sept bots » de l'issue ne sont pas mesurés : § 1.7, point 13 ; reportés à la branche suivante (§ 2.1)
   - [x] T2 — banc déterministe (`7372dcf` : `tests/banc_promesses.py`, `tests/test_promesses.py`, `tests/mesure_promesses.py`, cibles en échecs attendus) ; la mesure « avant » répétée (appels réels à Claude) reste à faire avant les commits de fond
   - [x] T3 — #5, volet technique (écriture atomique, garde de `load_state`, bot muet sur fichier illisible) — `e351abf` ; résultats : aucun ; réserves mineures d'`audit` reprises avec T7
   - [x] T4 — #2 — `d353257` (commit commun, M40), visé (M47) — résultat changé (`sincere`)
@@ -23,8 +35,8 @@ Mise à jour du 2026-10-10 (sixième, après la revue finale d'`expert-cicero` e
   - [x] T6 — #4 — `b995620`, visé (M47) ; renfort gradué en fonction pure, commune au moteur et au bot de dialogue (`pseudo_commitments.py`), dont dépend la condition (e) — résultat changé (probabilité des actions, donc ordres tirés)
   - [x] T7 — #5, volet de fond (journal d'envoi `pending_send`, trois envois au plus, réponse vide, sourdine ; M17, M36) — `d353257`, visé avec ses trois écarts (M45, M47) ; **ADR 0005** (présente mise à jour) — résultat changé (`sincere`, moment où un engagement atteint le moteur)
   - [x] T8 — mesures faites (protocole du § 1.3 : pile le 2026-10-03, Claude le 2026-10-10, M46), tableau avant / après unique (passation et commentaire de la PR #20), visa du mainteneur par la fusion de la PR #20 (M47) ; critère (c) de #17 non tenu sur 1 tirage sur 20, (e) signalé 1 fois sur 100 par un détecteur textuel — suite à donner : § 1.7
-  - [ ] T9 — documentation de fond, un passage (règle 9), textes listés par les ADR 0004 et 0005 compris ; commits `8404c10` (#5), `4af70d6` (#17), `66e1d43` et `d85d6d2` (#12), `1a0f4a1` (#17, #4, corrections après validation de fond) ; à clore par la session quand `docwriter` a rendu son dernier passage
-  - [ ] T10 — revue finale complète (§ 1.6) : `expert-cicero` et `audit` passés le 2026-10-10 ; restent `/code-review` et les décisions du § 1.7, puis sortie du brouillon de la PR #16
+  - [x] T9 — documentation de fond, un passage (règle 9) : `dcffdcf` (#2), `cce0d47` (#3), `0d6ac9a` (#4), `8404c10` (#5), `4af70d6` (#17), `66e1d43` (#12) ; corrections après validation `d85d6d2` (#12), `1a0f4a1` et `3dde397` (#17, #4). Les textes des exigences et de `CLAUDE.md` listés par les ADR 0004 et 0005 ne sont **pas** modifiés (M53)
+  - [x] T10 — revue finale complète (§ 1.6) : `expert-cicero`, `expert-webdip`, `audit` et `/code-review` passés le 2026-10-10 (dix constats de `/code-review`, aucun corrigé dans la branche, portés en issues) ; sortie du brouillon puis fusion (M51)
 
 ### 1.1 Ordre des commits
 
@@ -121,7 +133,25 @@ Issue du point (2026-10-03) : les messages scénarisés par l'API sont écartés
 
 ### 1.7 Décisions en attente du mainteneur (au 2026-10-10)
 
-Signalées par `architect`, non décidées. Chacune se tranche avant la sortie du brouillon de la PR #16, sauf mention contraire.
+**Issue de chaque point après la fusion de la PR #16** (point d'étape du 2026-10-10 ; le texte d'origine des points est conservé plus bas) :
+
+| Point | Issue | Détail |
+|---|---|---|
+| 1 | **encore à trancher** | textes des exigences 2.5 et 2.7 et de `CLAUDE.md`, « Architecture » : à soumettre au mot près (M53) ; l'ADR 0004 est à compléter par la condition moteur (e) dans la phrase proposée |
+| 2 | **encore à trancher** | texte de l'exigence 5.3 (ADR 0005, Conséquences) : même traitement (M53) |
+| 3 | **réglé**, devenu #24 | critère (c) accepté pour la branche (M50) ; suite : #24 (consigne d'abord, garde de code ensuite si besoin) |
+| 4 | **encore à trancher** (formel) | critère (e) : lecture « pas une fuite » rendue par `expert-cicero` et portée au corps de la PR #16 ; le visa a été donné connaissance prise (M47), mais aucune confirmation expresse du mainteneur n'est consignée |
+| 5 | **encore à trancher** | rattachement de #21 : proposé à la branche B2 du § 2.2 (et non plus à la branche non-régression) |
+| 6 | **devenu #29** | commentaire de `_message_key`, faux site, tests de l'annonce après `[send-retry]` / `[send-resume]` |
+| 7 | **devenu #27** | `__pycache__` et `exporter_patchs.sh --verifier` ; cause toujours présente à `449f02d` (`outils/exporter_patchs.sh:28`, `find . -type f` sans exclusion ; relu le 2026-10-10) |
+| 8 | **devenu #25** | sortie de Claude de type inattendu |
+| 9 | **devenu #28** | script de concordance documentation ↔ code |
+| 10 | **devenu #29** | en-tête périmé de `pseudo_commitments.py`, joint au même commit |
+| 11 | **réglé** | complément ajouté au corps de #22 (M52 ; relu le 2026-10-10) |
+| 12 | **devenu #26** pour la mesure ; **encore à trancher** pour la marge | commentaire posé sur #13 pour le printemps 1901 (M52) ; garder ou revoir 0,05 : décision du mainteneur après #26 |
+| 13 | **réglé** | `Closes #12` retiré de la PR #16, #12 ouverte (M49) ; les deux mesures restent à faire (§ 2.1) |
+
+Texte d'origine (avant la fusion). Signalées par `architect`, non décidées. Chacune se tranchait avant la sortie du brouillon de la PR #16, sauf mention contraire.
 
 1. **Textes proposés par l'ADR 0004** (Conséquences, « Textes à rouvrir ») : `docs/exigences.md` 2.5 (règle à trois conditions, texte d'`expert-cicero`) et 2.7 (bilan des propres promesses du bot) ; `CLAUDE.md`, « Architecture » (phrase du retour *dialogue → moteur*, nommant `betray`). Le texte des exigences et de `CLAUDE.md` est au mainteneur ; `docwriter` applique.
 2. **Texte de l'exigence 5.3** : garantie « à relecture près » depuis le journal d'envoi (ADR 0005, écart 3) ; formulation proposée dans l'ADR 0005, Conséquences.
@@ -142,13 +172,64 @@ Points ajoutés après la revue finale du 2026-10-10 (`expert-cicero`, `audit`).
 
 ## 2. Branches suivantes
 
-Dans cet ordre, sauf décision contraire du mainteneur.
+### 2.1 Prochaine branche de travail — **proposition d'`architect` du 2026-10-10, non décidée**
+
+Le mainteneur fixe le périmètre (`CLAUDE.md`, « Git et GitHub ») ; rien de ce qui suit n'est engagé tant qu'il ne l'a pas fait. Aucune branche ni PR n'est créée.
+
+- **Nom proposé** : `claude/non-regression`.
+- **Objet** : rendre le travail sur les bots mesurable et sans risque — une batterie qui ne se casse plus toute seule, une partie 100 % bots où un message ne lance plus d'échange entre bots, une référence de non-régression, le bruit des valeurs chiffré. **Aucun paramètre ni consigne des bots n'y change** dans une partie ordinaire ; les issues qui changent un comportement (#24, #25, #21, marge) viennent après, pour être mesurées contre cette référence (§ 2.2, B2).
+- **Périmètre proposé** (fermé, cinq issues) : #27, #14, une issue à créer (référence de non-régression fonctionnelle), #26, #12 (reste à mesurer).
+
+| Rang | Issue | Tâche | Agent | Circuit | Résultat changé | Exige la pile | Appels à Claude |
+|---|---|---|---|---|---|---|---|
+| 0 | — | PR brouillon, fiche de branche ; commit préparatoire des reformulations M53 si le mainteneur les a approuvées au mot près (exigences 2.5, 2.7, 5.3 ; `CLAUDE.md`) | session principale, `architect` | 4 | non | non | non |
+| 1 | #27 | exclure `__pycache__` du parcours de `outils/exporter_patchs.sh` ; les scripts de `tests/` n'écrivent plus de `.pyc` | `coder` → `audit` | 3 | non | non (`amont/` requis pour la seconde batterie) | non |
+| 2 | #14 | garde de l'exigence 2.8 : un bot ne répond pas à une puissance tenue par un bot ; forme à spécifier (ci-dessous) ; tests au banc (`tests/faux_site.py`) | `expert-cicero` et `expert-webdip` spécifient, séparément → `coder` → `audit` → `docwriter` → `expert` valide | 1 | **oui dans une partie 100 % bots** (plus de réponse entre bots) ; **non attendu** dans une partie ordinaire, à mesurer (rang 5) | non pour le code et le banc ; oui pour le contrôle du rang 5 | non au banc ; quelques appels au contrôle du rang 5 |
+| 3 | à créer | référence de non-régression fonctionnelle : positions rejouées de la partie 3, grandeurs relevées, tolérances, commande de comparaison ; forme à spécifier (ci-dessous) | `expert-cicero` spécifie → `coder` → `audit` → `docwriter` | 1 | non (elle fixe l'existant) | oui pour la capture (recherches réelles, `cicero-orders` arrêté : M12) ; non pour la comparaison déterministe | non dans la proposition ; une couche « Claude » serait un ajout soumis à accord |
+| 4 | #26 | script versionné de mesure du bruit des valeurs (`tests/mesure/`), définition écrite par `expert-cicero` ; recherches répétées aux **mêmes** engagements (16 des 18 paires existantes diffèrent par un engagement fabriqué) | `expert-cicero` définit → `coder` → `audit` | 3, précédé de la définition | non | oui (même campagne de recherches que le rang 3) | non |
+| 5 | #12 | deux mesures restantes : A3 (partie ordinaire créée et jouée comme avant) et « moins de sept bots : échec propre, rien en base » ; A3 sert aussi de contrôle à #14 | session principale, sur la pile ; `expert-webdip` relit ; `coder` seulement si une mesure échoue | mesure, sans code attendu | non | oui ; « moins de sept bots » demande de retirer un compte bot : à annoncer (M12) | oui si un message est envoyé dans la partie ordinaire (contrôle de #14) |
+| 6 | toutes | documentation de fond, un passage (règle 9), puis revue finale (règle 10) | `docwriter` ; `audit`, les deux experts, `/code-review` | 4 | non | non | non |
+
+**Raisons de l'ordre.**
+
+- **#27 d'abord** : elle fait échouer la seconde batterie de `coder` et d'`audit` dès qu'un test est lancé à la main ; un seul commit, aucun résultat. Variante laissée au mainteneur : la sortir en correctif rapide avant l'ouverture de la branche (la condition « un seul domaine de commit » n'est tenue que si la correction se limite à `outils/exporter_patchs.sh`).
+- **#14 avant toute mesure sur la pile** : tant que la garde manque, un message posté dans la partie 3 lance un échange entre bots, chaque réponse appelant Claude (jusqu'à dix réponses par côté, par paire et par phase : `MAX_EXCHANGES_PER_PAIR_PER_PHASE`, `claude_dialogue_bot.py:37` ; filtre actuel sans regard sur l'expéditeur : `claude_dialogue_bot.py:1437-1440`, lu à `449f02d`). Les rangs 3 à 5 travaillent sur cette partie.
+- **Référence avant #26 dans le code, une seule campagne sur la pile** : les deux lisent des tables de recherche réelles et demandent `cicero-orders` arrêté ; un seul arrêt annoncé.
+- **#12 en dernier** : A3 se mesure sur le code final de la branche et vaut contrôle « partie ordinaire inchangée » pour #14.
+
+**Deux formes à fixer avant le code** (avis d'`architect`, à confirmer par les experts et par le mainteneur) :
+
+- **#14, forme de la garde.** L'issue pose deux options : filtrer les comptes bots, ou faire taire la seule puissance scénarisée. Avis : elles répondent à deux besoins distincts et se composent. (1) Garde de production, toujours active : un bot ne répond pas à un message dont l'expéditeur est une puissance tenue, dans cette partie, par l'un des comptes que le démon de dialogue pilote lui-même (`API_KEYS`, `claude_dialogue_bot.py:28`) — l'information est locale au démon, sans appel à la plateforme (hypothèse de forme, à confirmer par `expert-webdip`). (2) Dispositif d'essai, hors de la branche : une « puissance scénarisée », déclarée par partie, dont les messages sont traités comme ceux d'un joueur et dont le bot se tait ; sans elle, la garde (1) rend impossible tout message scénarisé dans une partie 100 % bots. La branche proposée ne fait que (1) ; (2) est un terme nouveau et une lecture de l'exigence 2.8 à trancher (ADR), reportés à B3. Test de suppression : la garde (1) est un prédicat pur sur (partie, expéditeur), testable au banc sans pile.
+- **Référence de non-régression, forme et emplacement.** Avis : deux couches. Couche déterministe, dans la CI : des tables de recherche réelles enregistrées, passées aux fonctions pures (renfort gradué, `order_values`, condition (e), table de décision de #17), sorties comparées à l'identique. Couche répétée, hors CI : recherches du moteur sur position rejouée, comparées avec une tolérance tirée de #26. **Obstacle** : ces tables et positions sont de l'état de partie, que l'exigence 4.3 et `tests/verifier.sh` interdisent dans le dépôt, et les relevés actuels sont hors git pour cette raison (`tests/mesure/LISEZMOI.md`). Décision du mainteneur requise avant le rang 3 (§ 2.3, question 2).
+
+**Variante.** Si le mainteneur veut corriger sans attendre le `sincere` trop large (#24, qui fausse dès aujourd'hui le bilan `own_promises`), #24 peut prendre la place de #12 ; la branche change alors un résultat (consigne), demande une campagne d'appels à Claude (60 au moins : S1, S5 et S2, vingt tirages chacune, compteur à relever) et son tableau se construit sans référence. `architect` ne le recommande pas.
+
+### 2.2 Branches suivantes (proposition du 2026-10-10)
+
+Dans cet ordre, sauf décision contraire du mainteneur. Les noms sont indicatifs.
 
 | Branche | Issues | Motif du regroupement | Dépend de |
 |---|---|---|---|
-| non-régression | #9, #14, #15, plus une issue à créer (référence de non-régression) ; #21 proposé (§ 1.7, point 5 : décision du mainteneur) | Même dossier (`cicero/overlay/essais/`) et même besoin : des essais qui ne supposent ni la partie 15 ni une action humaine, et qui n'écrivent pas dans les fichiers de production. #14 (garde de l'exigence 2.8) est le prérequis des messages scénarisés par l'API, donc d'un essai de la chaîne entière sans humain ; #15 (quatre points non vérifiés de l'import) sont des mesures à exécuter, dont deux (arrêt long, reprise après échec d'appel) demandent la pile et la partie 100 % bots | `claude/promesses` : positions rejouées et partie 100 % bots (T1, T2) ; signature de `_reject_contradictions` fixée par #2 et #17 |
-| installation reproductible | #6, #7, #8, #13 | #6 et #7 touchent le `Dockerfile` (une seule reconstruction de l'image) et épinglent ce dont dépend le comportement des bots (CLI, modèle) ; #7 et #8 touchent `install.sh` ; #13 (`br_regularize_lambda`, 1e-2 contre 3e-3) touche `cicero_no_dialogue.prototxt`, paramètre du moteur embarqué dans la même image : si le mainteneur revient à 3e-3, c'est un changement de résultat à mesurer contre la référence de non-régression, avec #6 et #7 | non-régression : épingler le modèle, retirer les outils ou changer λ change un résultat, à mesurer contre une référence ; #13 attend la décision du mainteneur (`needs-info`) |
-| exploitation | #10, #11, #18, #22 (isolement par partie d'un fichier d'engagements mal formé), #23 (croissance de `current_plans.json`) | Durcissement et tenue dans le temps de la pile : redémarrage, secret, fichiers d'état, réglages de sécurité du dépôt | `claude/promesses` (#5 : même code de persistance que #11, point 2) ; non-régression pour la question du redémarrage en cours de phase (#10) |
+| B2 — `claude/sincere-enonce` | #24, #25, #21, #29 ; plus la marge de 0,05 si le mainteneur la revoit après #26 | Même module (`generate_reply`, consigne et boucle d'envoi de `claude_dialogue_bot.py`) ; #24, #25 et #21 changent un résultat (`sincere`, consigne) : un seul tableau avant / après, une seule campagne d'appels à Claude, un visa ; #25 touche le contrat de sortie `reply` / `sincere` (issue sensible) ; #29 (tests et commentaires, aucun résultat) protège la même boucle d'envoi | B1 : référence de non-régression, bruit chiffré (#26), garde #14 |
+| B3 — essais de bout en bout | #9, #15, #28 ; plus la « puissance scénarisée » (issue et ADR à proposer) | Essais fonctionnels sans humain et sans écriture dans les fichiers de production (#9), mesures restées non vérifiées (#15), concordance documentation ↔ code par script (#28) | B1 (#14, partie 100 % bots) ; B2 (contrat de sortie et signature définitifs) |
+| B4 — installation reproductible | #6, #7, #8, #13 | inchangé : `Dockerfile` et `install.sh`, une seule reconstruction de l'image ; #13 (λ) à peser avec le commentaire du 2026-10-10 sur le printemps 1901 | B1 (référence : épingler le modèle, retirer les outils ou changer λ change un résultat) ; #13 attend le mainteneur (`needs-info`) |
+| B5 — exploitation | #10, #11, #18, #22, #23 | inchangé : durcissement et tenue dans le temps de la pile | B1 pour le redémarrage en cours de phase (#10) |
+
+Dépendances au 2026-10-10. **Ajoutées** : B2 → B1 (référence, #26, #14) ; B3 → B1 et B2. **Retirées** : #21 → non-régression (passe à B2) ; #9 et #15 sortent de la branche non-régression, scindée en B1 et B3 ; exploitation → `claude/promesses` (satisfaite par la fusion). **Inchangées** : installation reproductible → référence de non-régression ; exploitation → non-régression pour #10.
+
+### 2.3 Questions à trancher par le mainteneur (2026-10-10)
+
+1. **Périmètre de la prochaine branche** : la proposition du § 2.1 (cinq issues), sa variante, ou un autre découpage ; nom de la branche.
+2. **Référence de non-régression et exigence 4.3** : versionner un petit jeu de positions et de tables de recherche tirées de la partie 3 (partie 100 % bots, sans compte ni message de joueur), avec une exception écrite dans l'exigence 4.3 et dans `tests/verifier.sh` (ADR) ; ou garder ces données hors git et ne versionner que les scripts (la référence n'est alors pas rejouable sur une autre machine) ; ou la limiter à des tables fabriquées par le banc. Création de l'issue correspondante, sur accord.
+3. **#14** : forme de la garde (§ 2.1) ; qui vise le changement — il ne touche que les parties 100 % bots : `expert-cicero` selon `CLAUDE.md`, ou le mainteneur comme pour `claude/promesses` ; annonce préalable dans tous les cas (exigence 2.11).
+4. **#27** : dans la branche (rang 1) ou en correctif rapide dès maintenant.
+5. **Reformulations M53** (exigences 2.5, 2.7, 5.3 ; `CLAUDE.md`, « Architecture », « Rigueur », « Commandes ») : textes à approuver au mot près ; proposées en commit préparatoire de la branche.
+6. **Mesure « moins de sept bots » de #12** sur la pile en service (retrait temporaire d'un compte bot) ou sur une base de travail séparée.
+7. **Triage** de #21, #22, #23, #24, #25 et #29 (`needs-triage`) : `ready-for-agent` proposé pour toutes.
+8. **Rattachement de #21** à B2 ; **lecture du critère (e)** de #17 à confirmer (§ 1.7, points 4 et 5).
+9. **Marge de 0,05** : après #26 ; si elle change, à joindre à B2 (résultat, tableau, visa).
+
+État au 2026-10-03 du tableau des branches (remplacé par les § 2.1 et 2.2) : non-régression (#9, #14, #15, référence à créer, #21 proposé), installation reproductible (#6, #7, #8, #13), exploitation (#10, #11, #18, #22, #23).
 
 Dépendances ajoutées le 2026-10-03 : non-régression → `claude/promesses` (remplace « validation du build ») ; installation reproductible → non-régression ; exploitation → `claude/promesses` et non-régression. Dépendance retirée : la ligne « validation du build », faite dans la PR #1 (§ 6). Ajouts de la seconde mise à jour : #14 et #15 → non-régression (#15, point « installation sur une autre machine », peut être levé plus tôt par toute session cloud, sans attendre la branche) ; #13 → installation reproductible, après décision du mainteneur ; #10, point « aucun compte administrateur » : T1 n'a pas créé de compte Admin (M20, script en ligne de commande), le point reste à #10.
 
@@ -165,46 +246,51 @@ Recoupements à connaître :
 - #10 (motif du correctif du gamemaster dans l'architecture § 5) : le texte actuel du § 5 donne déjà le motif rectifié (`d843896`, `83e2087`) ; à confirmer par `docwriter`, puis à rayer de l'issue.
 - #6 et #7 pendant `claude/promesses` : voir § 1.3, version de la CLI et modèle notés à chaque mesure.
 
+Recoupements ajoutés le 2026-10-10 :
+
+- #14 et #12 (A3) : le contrôle « partie ordinaire inchangée » de #14 et le critère A3 de #12 sont une même mesure.
+- #26 et la référence de non-régression : mêmes tables de recherche réelles, mêmes scripts (`tests/mesure/rejeu_moteur.py`), même arrêt de `cicero-orders` ; la tolérance de la couche répétée de la référence vient du chiffre de #26.
+- #26, la marge de 0,05 et #13 : le commentaire `claude_dialogue_bot.py:40-41` (« well above the noise ») se corrige avec la mesure ; revoir la marge ou λ change un résultat (B2, B4).
+- #24 et #25 : même fonction (`generate_reply`) et même contrat de sortie ; la garde de code de #24 (option 2 de l'issue) et la validation de type de #25 se spécifient ensemble ; #24, option 2, demande un ADR (contrat de sortie).
+- #24, #21 et #6, #7 : une mesure sur Claude n'est comparable que si la CLI et le modèle servi n'ont pas changé (mesure du 2026-10-10 : `claude-sonnet-5-5`, CLI 2.1.288) ; sinon la mesure « avant » est refaite.
+- #29 et #9 : l'en-tête périmé de `pseudo_commitments.py` est cité par les deux ; #29 le corrige, à rayer de #9 ensuite.
+- #9 et la PR #16 : `cicero/overlay/essais/test_multiparty.py:55` dépaquette deux valeurs du retour de `_reject_contradictions` (constat d'audit de la revue finale), à répercuter sur #9.
+- #28 et la règle 9 : le script de concordance sert à chaque passage de `docwriter` ; placé en B3 faute de place, il peut être avancé sur décision du mainteneur.
+
 ## 3. Issues hors plan
 
-Aucune : les dix-neuf issues ouvertes (#2 à #15, #17, #18, #21 à #23 ; `gh issue list`, 2026-10-10) sont rattachées. Seize sont triées (libellés posés le 2026-10-03, M13 ; #18 créée le même jour, `ready-for-agent`) ; #21, #22 et #23, créées le 2026-10-10 (M48), portent encore `needs-triage` : triage à faire par le mainteneur (`ready-for-agent` proposé pour les trois).
+Aucune : les vingt issues ouvertes (`gh issue list --state open`, 2026-10-10, après la fusion de la PR #16) sont rattachées à une branche **proposée** (§ 2.1 et 2.2 ; aucune n'est décidée). Six portent encore `needs-triage` (#21 à #25, #29) : triage à faire par le mainteneur. Fermées par la PR #16 : #2, #3, #4, #5, #17 (vérifié le 2026-10-10).
 
-| Issue | Libellés | Tâche | Branche |
-|---|---|---|---|
-| #2 | `ready-for-agent` | T4 (fait, `d353257`, visé) | `claude/promesses` |
-| #3 | `ready-for-agent` | T5, fermée par le commit de #17 (`d353257`, visé) | `claude/promesses` |
-| #4 | `ready-for-agent` | T6 (fait, `b995620`, visé) | `claude/promesses` |
-| #5 | `ready-for-agent` | T3 (technique, `e351abf`), T7 (fond, `d353257`, visé avec ses écarts, M45) ; ADR 0005 | `claude/promesses` |
-| #12 | `enhancement`, `ready-for-agent` | T1 (fait, critères A1 à A5 à lever) | `claude/promesses` |
-| #17 | `enhancement`, `ready-for-agent` | T5 — ADR 0004 (révisé, complété) ; fait, `d353257`, visé ; critère (c) : § 1.7 | `claude/promesses` |
-| #6 | `ready-for-agent` | outils du bot de dialogue, CLI épinglée | installation reproductible |
-| #7 | `ready-for-agent` | versions à épingler | installation reproductible |
-| #8 | `ready-for-agent` | mise à jour de `amont/` | installation reproductible |
-| #13 | `needs-info` | décision du mainteneur (garder 1e-2 documenté, ou revenir à 3e-3 avec tableau et visa) ; documentation dans tous les cas | installation reproductible |
-| #9 | `ready-for-agent` | reprise des essais | non-régression |
-| #14 | `ready-for-agent` | garde de l'exigence 2.8 ; forme à fixer par `architect` au plan de la branche | non-régression |
-| #15 | `ready-for-human` | quatre mesures à exécuter par le mainteneur ou une session avec la pile ; le point « autre machine » peut être levé par une session cloud à tout moment | non-régression |
-| #10 | `ready-for-agent` | durcissements | exploitation |
-| #11 | `ready-for-agent` | arrêt court, purge des fichiers d'état | exploitation |
-| #18 | `ready-for-agent` | réglages de sécurité du dépôt : ruleset « Protection main » importé et modes de fusion restreints le 2026-10-03 (M41) ; reste la section « Sécurité du dépôt » du README (`docwriter`) et le script de contrôle (`coder` → `audit`, circuit 3) | exploitation |
-| à créer | — | référence de non-régression | non-régression |
-| #21 | `bug`, `needs-triage` | `cicero :` promesse rompue réaffirmée à la puissance trahie avant la phase suivante — après une trahison, la section des promesses ne montre plus rien de la puissance trahie (ADR 0004, limites connues) ; change un résultat (consigne) ; créée le 2026-10-10 (M48) | à fixer par le mainteneur (§ 1.7, point 5) : non-régression proposée, après la référence de non-régression |
-| #22 | `bug`, `needs-triage` | `cicero :` un fichier d'engagements mal formé dans une partie rend muets les bots de toutes les parties — isolement par partie (ADR 0004, limites connues ; M18 ; ADR 0005, décision 1 pour `pending_send`) ; créée le 2026-10-10 (M48) | exploitation |
-| #23 | `enhancement`, `needs-triage` | `install :` croissance de `current_plans.json` (clés `candidates` et `search`, 35 actions au plus, plus l'action injectée, par puissance et par export) — complément de #11 ; créée le 2026-10-10 (M48) | exploitation |
+| Issue | État | Libellés | Tâche | Branche (proposée, sauf mention) |
+|---|---|---|---|---|
+| #2 | fermée | `ready-for-agent` | deux ordres contraires : `d353257`, visé | `claude/promesses` (fusionnée) |
+| #3 | fermée | `ready-for-agent` | implémentée par #17 : `d353257`, visé | `claude/promesses` (fusionnée) |
+| #4 | fermée | `ready-for-agent` | renfort gradué : `b995620`, visé | `claude/promesses` (fusionnée) |
+| #5 | fermée | `ready-for-agent` | `e351abf`, `d353257` ; ADR 0005 ; trois écarts acceptés (M45) | `claude/promesses` (fusionnée) |
+| #17 | fermée | `enhancement`, `ready-for-agent` | ADR 0004 ; `d353257`, visé ; critère (c) : #24 | `claude/promesses` (fusionnée) |
+| #12 | ouverte | `enhancement`, `ready-for-agent` | script livré (`e0624e6`) ; restent A3 et « moins de sept bots » (M49) | B1, rang 5 |
+| #27 | ouverte | `bug`, `ready-for-agent` | `__pycache__` et contrôle des patchs | B1, rang 1 (ou correctif rapide) |
+| #14 | ouverte | `ready-for-agent` | garde de l'exigence 2.8 | B1, rang 2 |
+| à créer | — | `enhancement`, `needs-triage` proposés | référence de non-régression fonctionnelle | B1, rang 3 |
+| #26 | ouverte | `enhancement`, `ready-for-agent` | mesure versionnée du bruit des valeurs | B1, rang 4 |
+| #24 | ouverte | `bug`, `needs-triage` | `sincere` rempli d'ordres que la réponse n'énonce pas ; change un résultat | B2 |
+| #25 | ouverte | `bug`, `needs-triage` | sortie de Claude mal typée ; change un résultat, contrat de sortie | B2 |
+| #21 | ouverte | `bug`, `needs-triage` | promesse rompue réaffirmée à la puissance trahie ; change un résultat (consigne) | B2 (rattachement à trancher) |
+| #29 | ouverte | `enhancement`, `needs-triage` | tests de l'annonce après renvoi ou reprise ; commentaires périmés | B2 |
+| #9 | ouverte | `ready-for-agent` | reprise des essais | B3 |
+| #15 | ouverte | `ready-for-human` | quatre mesures ; le point « autre machine » peut être levé par une session cloud à tout moment | B3 |
+| #28 | ouverte | `enhancement`, `ready-for-agent` | script de concordance documentation ↔ code | B3 |
+| #6 | ouverte | `ready-for-agent` | outils du bot de dialogue, CLI épinglée | B4 |
+| #7 | ouverte | `ready-for-agent` | versions à épingler | B4 |
+| #8 | ouverte | `ready-for-agent` | mise à jour de `amont/` | B4 |
+| #13 | ouverte | `needs-info` | λ : décision du mainteneur (1e-2 documenté, ou 3e-3 avec tableau et visa) ; commentaire du 2026-10-10 sur le printemps 1901 | B4 |
+| #10 | ouverte | `ready-for-agent` | durcissements | B5 |
+| #11 | ouverte | `ready-for-agent` | arrêt court, purge des fichiers d'état | B5 |
+| #18 | ouverte | `ready-for-agent` | reste : section « Sécurité du dépôt » du README, script de contrôle (M41, M44) | B5 |
+| #22 | ouverte | `bug`, `needs-triage` | isolement par partie ; corps complété le 2026-10-10 (M52) | B5 |
+| #23 | ouverte | `enhancement`, `needs-triage` | croissance de `current_plans.json` | B5 |
 
-Les quatre points « non vérifiés » de la passation de la PR #1 sont devenus l'issue #15.
-
-**Constats sans issue** (revue finale du 2026-10-10 ; détail au § 1.7, points 7 à 13). Rattachement proposé, à confirmer par le mainteneur avec la création des issues :
-
-| § 1.7 | Constat | Suite proposée | Branche proposée |
-|---|---|---|---|
-| 7 | `exporter_patchs.sh --verifier` et `__pycache__` sous l'overlay | issue `bug`, ou correctif rapide `install:` ; `coder` → `audit`, circuit 3 | correctif rapide, à défaut exploitation |
-| 8 | sortie de Claude de type inattendu (`reply`, `sincere`) | issue `bug` ; `expert-cicero` spécifie, tableau et visa (résultat : `sincere`) | non-régression, après la référence |
-| 9 | concordance documentaire non contrôlée par `tests/verifier.sh` | issue `enhancement` ; script, `coder` → `audit`, circuit 3 | non-régression |
-| 10 | en-tête de `pseudo_commitments.py` périmé | à joindre à l'issue du point 7 ou à #9 ; commentaire seul | correctif rapide, à défaut non-régression |
-| 11 | exception dans une partie, état non validé | complément au corps de #22 | exploitation |
-| 12 | bruit des valeurs, marge de 0,05, renfort au printemps 1901 | issue `enhancement` (mesure versionnée du bruit) ; le printemps 1901 en commentaire de #13 ; décision du mainteneur sur la marge ensuite | non-régression (mesure) ; installation reproductible (#13) |
-| 13 | critères de #12 non mesurés | pas d'issue : mesure ou retrait de `Closes #12` | `claude/promesses` |
+Les quatre points « non vérifiés » de la passation de la PR #1 sont devenus l'issue #15. Les constats de la revue finale du 2026-10-10 sont tous devenus des issues ou des compléments d'issue (§ 1.7, tableau d'issue des points 6 à 13) : il ne reste aucun constat sans issue.
 
 ## 4. Décisions du mainteneur
 
@@ -258,6 +344,12 @@ Les quatre points « non vérifiés » de la passation de la PR #1 sont devenus 
 | M46 | 2026-10-10 | Les 160 appels à Claude sont **lancés** : position rejouée de la partie 3, S1902M, Italie, interlocuteur Autriche, tiers France (modèle servi `claude-sonnet-5-5`, CLI 2.1.288, 0,96 USD). Résultat : critères (b) JSON lisible et (d) labels exacts (31 sur 31) **tenus** ; (c) aucun label sans conflit **non tenu sur 1 tirage sur 20** (`sincere` rempli du plan entier) ; (e) aucune fuite **signalé 1 fois sur 100** par un détecteur textuel (à la lecture, pas une fuite de promesse ; lecture à confirmer, § 1.7) ; (f) consigne + 1 477 caractères | PR #20, commentaire du 2026-10-10 ; relevés hors git (`amont/mesure/resultats/m3_*`) |
 | M47 | 2026-10-10 | **Visa** du code de fond de #2, #3, #4, #5 et #17 par la fusion de la PR #20 (`9ac8511`), connaissance prise du résultat de M46 ; `main` ensuite fusionnée dans `claude/promesses` (`ab872ab`) | `9ac8511` ; § 1 et § 1.1 |
 | M48 | 2026-10-10 | Création des issues #21 (promesse rompue réaffirmée à la puissance trahie), #22 (fichier d'engagements mal formé : isolement par partie), #23 (croissance de `current_plans.json`), proposées à la passation du 2026-10-03 ; libellés `needs-triage` posés, triage à faire | issues #21, #22, #23 ; § 2 et § 3 |
+| M49 | 2026-10-10 | **#12 n'est pas fermée par la PR #16** : mot-clé de fermeture retiré du corps de la PR ; script livré et documenté, critères A3 (partie ordinaire inchangée) et « moins de sept bots : échec propre » non mesurés. Vérifié après la fusion : #12 `OPEN` | PR #16 (corps, passation du 2026-10-10) ; § 1 et § 2.1 |
+| M50 | 2026-10-10 | Critère (c) de #17 (« aucun label sans conflit »), non tenu sur 1 tirage sur 20 : **accepté pour la branche** `claude/promesses` ; suite dans l'issue #24 (consigne, puis remesure) | PR #16 (corps) ; issue #24 ; § 1.7, point 3 |
+| M51 | 2026-10-10 | **Sortie du brouillon** de la PR #16 autorisée, puis **fusion** par le mainteneur en commit de fusion : `449f02d` (tête `3dde397`, 2026-10-10 08:49 UTC). #2, #3, #4, #5 et #17 fermées par la fusion (vérifié) ; mise à jour de la feuille de route reportée après la fusion (présent point d'étape) | `449f02d` ; § 1 et § 6 |
+| M52 | 2026-10-10 | Créations sur accord : issues #24 (`sincere` plus large que la réponse), #25 (sortie de Claude mal typée), #26 (mesure versionnée du bruit des valeurs), #27 (`__pycache__` et contrôle des patchs), #28 (concordance documentation ↔ code par script), #29 (tests de l'annonce après renvoi ou reprise) ; complément au corps de #22 (exceptions de `process_bot`, validation de l'état, `current_plans.json` mal formé) ; commentaire sur #13 (λ au printemps 1901) | issues #24 à #29, #22, #13 ; § 1.7 et § 3 |
+| M53 | 2026-10-10 | Reformulations des exigences 2.5 et 2.7 et de `CLAUDE.md`, « Architecture » (ADR 0004, à compléter par la condition moteur), de l'exigence 5.3 (ADR 0005, Conséquences), de `CLAUDE.md`, « Rigueur » (exception pendant un silence du bot) et « Commandes » (la première batterie lance aussi les tests) : **à traiter après la fusion**, textes à soumettre au mot près ; rien n'est modifié à ce jour | passation de la PR #16 (§ 2 et § 3) ; § 1.7, points 1 et 2 ; § 2.3, question 5 |
+| M54 | 2026-10-10 | La pile est **laissée en service** après la branche (image construite sur `afc0dfe`, partie 3 en pause) ; M12 reste applicable | passation de la PR #16 (§ 2 et § 5) |
 
 ## 5. Escalades, relances et arrêts hors branche
 
@@ -265,9 +357,11 @@ Consultations faites hors de toute branche ouverte (`docs/agents/routage.md`, §
 
 | Date | Fiche / modèle / critère déclenché / statut obtenu / suite |
 |---|---|
+| 2026-10-10 | `architect-approfondi` / opus / point d'étape après la fusion de la PR #16 ; critères signalés : seuil « macro » (branche non-régression scindée, B2 insérée), invariant « rien de local dans le dépôt » et exigence 4.3 en jeu pour la référence, contrat de sortie (#25, #24) / `revue requise` / périmètre et questions du § 2.3 portés au mainteneur ; aucune consultation Fable |
 
 ## 6. Branches fusionnées
 
 | Branche | PR | Fusion | Périmètre | Revue finale |
 |---|---|---|---|---|
+| `claude/promesses` | #16 (et #20, temporaire, M43) | `449f02d` (tête `3dde397`), 2026-10-10 | Logique des promesses : #2, #3, #4, #5, #17 fermées ; #12 livrée, laissée ouverte (M49). Résultats changés : `sincere`, consigne, probabilité des actions, `current_plans.json`, ordre des écritures et des envois ; tableau avant / après dans la PR #20, visa M47 ; ADR 0004 et 0005 | `expert-cicero`, `expert-webdip`, `audit` (complet), `/code-review` (dix constats portés en issues #24 à #29 et complément de #22) ; deux consultations Fable (ADR 0004, ADR 0005) |
 | `claude/import-initial` | #1 | `a9566a2` (tête `d84cebc`), 2026-10-03 | Import initial, sans issue préalable : modèle adapté au projet (circuit 4) ; projet reporté dans le dépôt, arbres identiques à l'origine (circuit 3, ADR 0002) ; `Dockerfile` validé par un build complet puis démarrage sur base vide, le 2026-10-03 (circuit 3). Résultats : aucun | `audit`, `expert-webdip`, `docwriter`, `/code-review`, joués par des agents génériques instruits de lire leur fiche ; `architect` non passé ; commits `7b8451d` à `d84cebc` relus par la session principale seule (M9) |
