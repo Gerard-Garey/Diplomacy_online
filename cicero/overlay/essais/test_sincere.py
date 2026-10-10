@@ -52,7 +52,7 @@ for title, message in SCENARIOS:
     print("SCENARIO:", title)
     print("AUSTRIA:", message)
     print("-" * 78)
-    reply, sincere = bot.generate_reply(
+    reply, sincere, _betray = bot.generate_reply(
         POWER, "AUSTRIA", board, PHASE, message, plan_section=plan_section, trust_section=""
     )
     print("REPLY  :", reply)

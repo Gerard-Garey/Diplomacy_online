@@ -28,9 +28,10 @@
 #
 import json
 import logging
+import math
 import os
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from fairdiplomacy import pydipcc
 from fairdiplomacy.typedefs import Action, Order, Power, PowerPolicies
@@ -52,6 +53,9 @@ def load_commitments(game_id: str, phase: str) -> Dict[Power, List[Order]]:
     Returns {} on any missing file/key -- this feature is opt-in and must
     never hard-fail order computation just because the dialogue-side
     extraction hasn't produced anything yet (e.g. no negotiation this phase).
+    Same for a file that cannot be read or is not {game: {phase: {power:
+    [orders]}}}: a power whose entry is not a list of strings gets no
+    commitment, the entries of the other powers are kept.
     """
     if not game_id:
         return {}
@@ -59,7 +63,36 @@ def load_commitments(game_id: str, phase: str) -> Dict[Power, List[Order]]:
         data = json.loads(COMMITMENTS_FILE.read_text())
     except (FileNotFoundError, json.JSONDecodeError):
         return {}
-    return data.get(str(game_id), {}).get(phase, {})
+    except (OSError, ValueError) as e:  # access rights, a directory in its place, bytes that are not UTF-8
+        logging.warning(f"pseudo_commitments: {COMMITMENTS_FILE} cannot be read ({type(e).__name__}), no commitment used")
+        return {}
+    # Valid JSON in an unexpected shape (hand-edited or damaged file): same rule,
+    # the orders are computed without the promises that cannot be read. The
+    # dialogue bot goes silent on such a file (check_state_files).
+    if not isinstance(data, dict):
+        logging.warning(
+            f"pseudo_commitments: {COMMITMENTS_FILE} does not hold an object "
+            f"({type(data).__name__}): no commitment used"
+        )
+        return {}
+    phases = data.get(str(game_id), {})
+    powers = phases.get(phase, {}) if isinstance(phases, dict) else None
+    if not isinstance(powers, dict):
+        logging.warning(
+            f"pseudo_commitments: unexpected shape in {COMMITMENTS_FILE} for game {game_id}, "
+            f"phase {phase}: no commitment used"
+        )
+        return {}
+    commitments = {}
+    for power, orders in powers.items():
+        if isinstance(orders, list) and all(isinstance(o, str) for o in orders):
+            commitments[power] = orders
+        else:
+            logging.warning(
+                f"pseudo_commitments: commitments of {power} in {COMMITMENTS_FILE} are not a list "
+                f"of orders: ignored"
+            )
+    return commitments
 
 
 def legal_commitments(
@@ -168,6 +201,146 @@ def build_extra_plausible_actions(
     return {agent_power: [spliced][:max_injected]}
 
 
+def boosted_policy(
+    power_policy: Dict[Action, float],
+    promised_orders: Iterable[Order],
+    boost_multiplier: float,
+    max_prob: float = MAX_COMMITMENT_PROB,
+) -> Dict[Action, float]:
+    """Graded boost of one power's policy towards its own promises (pure function).
+
+    With S the promised orders, n = |S| and, for each candidate action a,
+    m(a) = |S & a| the number of promised orders it honours:
+
+        p'(a) = max(p(a), min(p(a) * boost_multiplier ** (m(a) / n), max_prob))
+        q(a)  = p'(a) / sum(p')
+
+    So an action honouring every promise gets the full multiplier, one honouring
+    half of them its square root, one honouring none is left alone -- every
+    candidate is treated by what it honours, whichever comes first in the dict.
+    max(p, ...) so the cap can only ever withhold a boost, never demote an
+    action that was already above it: before renormalisation, promising the
+    action you already favour does not lower its weight p'. Its probability q
+    can still go down, when the renormalisation spreads over it the boost given
+    to other candidates: with promises {x, y}, multiplier 3 and cap 0.4, the
+    policy 0.6 (holds x and y) / 0.1 (holds x) / 0.3 (holds neither) becomes
+    0.559 / 0.161 / 0.280.
+
+    `promised_orders` must already be legal and conflict-free (legal_commitments
+    then resolve_commitment_conflicts). Returns a new dict with the same keys in
+    the same order; the input is not modified. No promise, or a policy whose
+    probabilities sum to 0: returned as is (copied, not renormalised).
+
+    Only probabilities are read and written, never a value. Depends on nothing
+    but the standard library, so the dialogue bot can call it to ask what the
+    engine's prior becomes once a promise is recorded.
+    """
+    promised = frozenset(promised_orders)
+    if not promised:
+        return dict(power_policy)
+    boosted = {}
+    for action, prob in power_policy.items():
+        held = len(promised.intersection(action))
+        factor = boost_multiplier ** (held / len(promised))
+        boosted[action] = max(prob, min(prob * factor, max_prob))
+    # fsum: exactly rounded, so the result does not depend on the dict order.
+    total = math.fsum(boosted.values())
+    if total <= 0:
+        return dict(power_policy)
+    return {action: prob / total for action, prob in boosted.items()}
+
+
+# Floor under the probability in the search's score, value + lambda * log(prob):
+# the one of compute_best_action_against_reweighted_opponent_joint_actions
+# (fairdiplomacy/agents/br_corr_bilateral_search.py).
+SCORE_PROB_FLOOR = 1e-6
+
+
+def _finite(x: Any) -> bool:
+    return isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(x)
+
+
+def rescored_candidates(
+    candidates: Any, search: Any, promised_orders: Iterable[Order]
+) -> Optional[List[Tuple[Action, float, float, float]]]:
+    """What the search's ranking becomes once `promised_orders` are the promises (pure function).
+
+    `candidates` and `search` are the entries plan_export writes under those
+    names: every candidate action of the last search with its value and its
+    probability BEFORE any boost, and the search's effective lambda, boost
+    multiplier and cap. Each candidate is boosted by boosted_policy() -- the
+    very function the engine applies -- then scored as the search scores it:
+
+        q      = boosted_policy({orders: prob}, promised_orders, boost, max_prob)
+        s'(a)  = value(a) + lambda * log(max(q(a), SCORE_PROB_FLOOR))
+
+    Returns [(action, value, q, s')] in the order of `candidates`, or None when
+    the table cannot be trusted: missing or malformed entry, a value, a
+    probability or a parameter that is not a finite number, or the same action
+    listed twice. None must never be read as "the engine would play it".
+
+    Exact on the exported table. The next search adds the action injected by
+    build_extra_plausible_actions() and re-estimates every value; neither is
+    known here.
+    """
+    if not isinstance(candidates, list) or not candidates or not isinstance(search, dict):
+        return None
+    regularize_lambda, boost, max_prob = (
+        search.get("lambda"), search.get("boost"), search.get("max_prob")
+    )
+    if not (_finite(regularize_lambda) and _finite(boost) and _finite(max_prob)):
+        return None
+    if regularize_lambda < 0 or boost <= 0:
+        return None
+
+    policy: Dict[Action, float] = {}
+    values: Dict[Action, float] = {}
+    for candidate in candidates:
+        if not isinstance(candidate, dict):
+            return None
+        orders, value, prob = candidate.get("orders"), candidate.get("value"), candidate.get("prob")
+        if not isinstance(orders, list) or not all(isinstance(o, str) for o in orders):
+            return None
+        if not (_finite(value) and _finite(prob)) or prob < 0:
+            return None
+        action = tuple(orders)
+        if action in policy:
+            return None
+        policy[action], values[action] = prob, value
+
+    boosted = boosted_policy(policy, promised_orders, boost, max_prob)
+    return [
+        (
+            action,
+            values[action],
+            boosted[action],
+            values[action] + regularize_lambda * math.log(max(boosted[action], SCORE_PROB_FLOOR)),
+        )
+        for action in policy
+    ]
+
+
+def engine_head_action(
+    candidates: Any, search: Any, promised_orders: Iterable[Order]
+) -> Optional[Action]:
+    """The action the search would rank first once `promised_orders` are the promises.
+
+    The candidate of highest s' in rescored_candidates(), the first one listed
+    when several tie; None when the table cannot be trusted. Lets the dialogue
+    bot ask, before it swaps a promise for another, whether the engine would
+    then actually play the replacing order. Reads the engine's table, writes
+    nothing to it.
+    """
+    rows = rescored_candidates(candidates, search, promised_orders)
+    if rows is None:
+        return None
+    head = rows[0]
+    for row in rows[1:]:
+        if row[3] > head[3]:
+            head = row
+    return head[0]
+
+
 def apply_commitments_to_policy(
     policy: PowerPolicies,
     game: pydipcc.Game,
@@ -192,11 +365,12 @@ def apply_commitments_to_policy(
     job, not this one's. This function only nudges what is already there, so it
     can never drag the agent onto an action its own search never produced.
 
-    For each promised order present in some candidate action, that action's
-    probability is multiplied by `boost_multiplier` (capped at
-    MAX_COMMITMENT_PROB). Promises the candidate set doesn't contain are left
-    alone. Illegal/stale orders are ignored (both routinely produced by LLM
-    extraction).
+    Every candidate action is boosted according to the share of the promised
+    orders it contains, up to `boost_multiplier` when it contains them all
+    (capped at MAX_COMMITMENT_PROB): see boosted_policy(). Promises the
+    candidate set doesn't contain are left alone. Illegal/stale orders are
+    ignored (both routinely produced by LLM extraction); if none is left, the
+    policy is returned untouched.
     """
     promised_orders = commitments.get(agent_power)
     if not promised_orders or agent_power not in policy:
@@ -206,23 +380,20 @@ def apply_commitments_to_policy(
     if len(power_policy) == 1 and next(iter(power_policy)) == ():
         return policy  # eliminated / no orderable units this phase
 
-    for order in resolve_commitment_conflicts(
-        legal_commitments(game, agent_power, promised_orders)
-    ):
-        matched = next((a for a in power_policy if order in a), None)
-        if matched is None:
-            continue
-        # max(orig, ...) so the cap can only ever withhold a boost, never demote
-        # an action that was already above it -- promising the action you already
-        # favour must not penalise it.
-        original = power_policy[matched]
-        power_policy[matched] = max(
-            original, min(original * boost_multiplier, MAX_COMMITMENT_PROB)
+    promised = resolve_commitment_conflicts(legal_commitments(game, agent_power, promised_orders))
+    if not promised:
+        return policy
+
+    policy[agent_power] = boosted_policy(power_policy, promised, boost_multiplier)
+    held = sorted((sum(1 for o in promised if o in a) for a in power_policy), reverse=True)
+    if held and held[0] > 0:
+        logging.info(
+            f"pseudo_commitments: boosted {agent_power} policy towards {promised}; "
+            f"promised orders held per candidate: {held}"
         )
-        logging.info(f"pseudo_commitments: boosted {agent_power} candidate matching {order!r}")
-
-    total = sum(power_policy.values())
-    if total > 0:
-        policy[agent_power] = {a: p / total for a, p in power_policy.items()}
-
+    else:
+        logging.info(
+            f"pseudo_commitments: no candidate holds any of {promised} for {agent_power}: "
+            f"nothing boosted (policy renormalised only)"
+        )
     return policy

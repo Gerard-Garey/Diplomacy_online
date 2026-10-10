@@ -69,24 +69,32 @@ index f1259e8..f6a50c5 100644
      target_link_libraries(profile_dipcc dipcc glog pthread)
  
 diff --git a/fairdiplomacy/agents/bqre1p_agent.py b/fairdiplomacy/agents/bqre1p_agent.py
-index 6c1e271..bbda162 100644
+index 6c1e271..b5eba33 100644
 --- a/fairdiplomacy/agents/bqre1p_agent.py
 +++ b/fairdiplomacy/agents/bqre1p_agent.py
-@@ -38,6 +38,8 @@ from fairdiplomacy.agents.br_corr_bilateral_search import (
+@@ -38,6 +38,12 @@ from fairdiplomacy.agents.br_corr_bilateral_search import (
  )
  from fairdiplomacy.agents.base_strategy_model_wrapper import BaseStrategyModelWrapper
  from fairdiplomacy.agents.plausible_order_sampling import PlausibleOrderSampler
-+from fairdiplomacy.utils.pseudo_commitments import apply_commitments_to_policy, load_commitments
-+from fairdiplomacy.utils.plan_export import export_plans
++from fairdiplomacy.utils.pseudo_commitments import (
++    MAX_COMMITMENT_PROB,
++    apply_commitments_to_policy,
++    load_commitments,
++)
++from fairdiplomacy.utils.plan_export import export_plans, exported_boost
  from fairdiplomacy.models.consts import POWERS
  from fairdiplomacy.typedefs import (
      Action,
-@@ -1070,6 +1072,17 @@ class BQRE1PAgent(SearchBotAgent):
+@@ -1070,6 +1076,21 @@ class BQRE1PAgent(SearchBotAgent):
                  game, agent_power=agent_power, agent_state=agent_state
              )
          bp_policy = filter_invalid_actions_from_policy(bp_policy, game)
 +
-+        if self.br_corr_bilateral_search_cfg.enable_pseudo_commitments:
++        # Our own policy as it is before the commitment boost: export_plans() needs
++        # the unboosted probabilities (the dialogue bot re-applies the boost itself).
++        prior_agent_policy = dict(bp_policy.get(agent_power, {}))
++        commitments_enabled = self.br_corr_bilateral_search_cfg.enable_pseudo_commitments
++        if commitments_enabled:
 +            commitments = load_commitments(game.get_metadata("game_id"), game.current_short_phase)
 +            bp_policy = apply_commitments_to_policy(
 +                bp_policy,
@@ -99,7 +107,15 @@ index 6c1e271..bbda162 100644
          # 1) get pairwise bqre policies for all our opponents
          bqre_policies: PowerPolicies = {}
          timings.start("corr_search_rescore_bp")
-@@ -1189,7 +1202,7 @@ class BQRE1PAgent(SearchBotAgent):
+@@ -1136,6 +1157,7 @@ class BQRE1PAgent(SearchBotAgent):
+         if len(bp_policy[agent_power]) == 1:
+             [action] = list(bp_policy[agent_power])
+             result.set_policy_and_value_for_power(agent_power, action, best_value=0)
++            bp_policy[agent_power] = prior_agent_policy  # see below, before the last return
+             return result
+ 
+         timings.start("corr_search_br_sample")
+@@ -1189,7 +1211,7 @@ class BQRE1PAgent(SearchBotAgent):
          )
  
          timings.start("corr_search_br_get_action")
@@ -108,13 +124,27 @@ index 6c1e271..bbda162 100644
              game,
              agent_power,
              bp_policy[agent_power],
-@@ -1201,6 +1214,10 @@ class BQRE1PAgent(SearchBotAgent):
+@@ -1201,6 +1223,24 @@ class BQRE1PAgent(SearchBotAgent):
          )
          result.set_policy_and_value_for_power(agent_power, best_action, best_value)
  
 +        export_plans(
-+            game.get_metadata("game_id"), game.current_short_phase, agent_power, action_values
++            game.get_metadata("game_id"),
++            game.current_short_phase,
++            agent_power,
++            action_values,
++            prior_policy=prior_agent_policy,
++            regularize_lambda=br_regularize_lambda,
++            boost=exported_boost(
++                commitments_enabled, self.br_corr_bilateral_search_cfg.pseudo_commitment_boost
++            ),
++            max_prob=MAX_COMMITMENT_PROB,
 +        )
++        # `result` keeps this very dict (get_bp_policy), and an incremental search
++        # starts from it (maybe_get_incremental_bp): put our policy back as it was
++        # before the boost, or the next search of this phase would boost it again.
++        # The boost has done its work by now: the action is chosen and exported.
++        bp_policy[agent_power] = prior_agent_policy
 +
          timings.stop()
          timings.pprint(logging.getLogger("timings").info)
