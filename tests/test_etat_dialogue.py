@@ -587,7 +587,7 @@ class Cycles(Montage, unittest.TestCase):
 
 
 # Messages reçus par la France : clés de game.messages, en centisecondes (Timestamp).
-T1, T2, T3 = 175940000000, 175940010000, 175940020000
+T1, T2, T3, T4 = 175940000000, 175940010000, 175940020000, 175940030000
 PAIRE = "S1901M:FRANCE<->ENGLAND"
 BUR, PIC = "A PAR - BUR", "A PAR - PIC"
 ECHECS_EN_APPARENCE = (
@@ -1357,6 +1357,129 @@ class Envois(Montage, unittest.TestCase):
         self.assertEqual([sortie.count(a) for a in ANNONCES], [0, 0, 0])
         self.assertEqual(self.par_destinataire(), {"ENGLAND": [], "GERMANY": [PIC]})
 
+    def test_l_pending_send_au_journal_vide_confirme_sans_annonce(self):
+        # Réponse sans engagement sincère : le journal écrit est une liste vide, valide
+        # comme telle ; la confirmation par relecture se fait, sans ligne à annoncer.
+        self.sinceres["FRANCE"] = []
+        self.site.comportements = [faux_site.ERREUR_500_STOCKE]
+        self.jeu.recevoir(T1, "ENGLAND", "FRANCE")
+        self.cycle(None)
+        self.assertEqual(self.bot1()["pending_send"]["journal"], [])
+        etat, sortie = self.cycle(None)
+        self.assertEqual((sortie.count("[send-confirmed]"), sortie.count("[send-failed]")), (1, 0))
+        self.assertEqual([sortie.count(a) for a in ANNONCES], [0, 0, 0])
+        self.assertNotIn("pending_send", self.bot1())
+        self.assertEqual(self.bot1()["replied_ts"], [str(T1)])
+
+    # Lignes qui annoncent le changement d'engagement de scenario_reprise, dans l'ordre.
+    ANNONCES_REPRISE = [
+        "  sincere commitments -> ['A PAR - PIC']",
+        "  [revision] FRANCE now promises 'A PAR - PIC' to ENGLAND: 'A PAR - BUR', promised to "
+        "them earlier this phase and dropped since, no longer counts as a promise to them",
+    ]
+    # Ce que la France a dit sincèrement à chacun (own_promises), avant et après la reprise.
+    DIT_AVANT_REPRISE = {"S1901M:ENGLAND": [BUR], "S1901M:GERMANY": [PIC]}
+    DIT_APRES_REPRISE = {"S1901M:ENGLAND": [PIC], "S1901M:GERMANY": [PIC]}
+
+    def scenario_reprise(self):
+        """BUR promis à l'Angleterre puis trahi pour l'Allemagne, envoi confirmé ; l'Angleterre
+        écrit de nouveau et la France lui dit PIC. Rend l'état avant ce dernier message."""
+        etat = self.scenario_trahison()
+        etat, _ = self.cycle(etat)
+        self.assertEqual(self.par_destinataire(), {"ENGLAND": [], "GERMANY": [PIC]})
+        self.assertEqual(self.bot1()["own_promises"]["pending"], self.DIT_AVANT_REPRISE)
+        del self.labels["FRANCE"]
+        self.jeu.recevoir(T4, "ENGLAND", "FRANCE")
+        return etat
+
+    def test_l_reprise_confirmee_d_emblee(self):
+        # Au cycle même, une fois, entre la ligne « replying to » et la ligne « sent ».
+        etat = self.scenario_reprise()
+        etat, sortie = self.cycle(etat)
+        lignes = sortie.splitlines()
+        debut = lignes.index(self.ANNONCES_REPRISE[0])
+        self.assertIn("replying to ENGLAND", lignes[debut - 1])
+        self.assertEqual(
+            lignes[debut:debut + 3], self.ANNONCES_REPRISE + ["  sent (status=200): 'entendu'"]
+        )
+        self.assertEqual([sortie.count(a) for a in ANNONCES], [0, 1, 1])
+        self.assertNotIn("pending_send", self.bot1())
+        self.assertEqual(self.bot1()["own_promises"]["pending"], self.DIT_APRES_REPRISE)
+        etat, sortie = self.cycle(etat)
+        self.assertEqual([sortie.count(a) for a in ANNONCES], [0, 0, 0])
+
+    def test_l_reprise_confirmee_par_relecture(self):
+        for redemarrage in (False, True):  # état rechargé du disque entre les cycles
+            with self.subTest(redemarrage=redemarrage):
+                self.setUp()
+                etat = self.scenario_reprise()
+                self.site.comportements = [faux_site.ERREUR_500_STOCKE]
+                etat, sortie = self.cycle(etat)
+                # Envoi incertain : rien n'est annoncé, les lignes attendent dans pending_send.
+                self.assertEqual(sortie.count("[send-uncertain]"), 1)
+                self.assertEqual([sortie.count(a) for a in ANNONCES], [0, 0, 0])
+                self.assertEqual(self.bot1()["pending_send"]["journal"], self.ANNONCES_REPRISE)
+                etat, sortie = self.cycle(None if redemarrage else etat)
+                # Au cycle de la confirmation, une fois, après la ligne qui la constate.
+                lignes = sortie.splitlines()
+                self.assertIn("[send-confirmed]", lignes[0])
+                self.assertEqual(lignes[1:3], self.ANNONCES_REPRISE)
+                self.assertEqual([sortie.count(a) for a in ANNONCES], [0, 1, 1])
+                self.assertNotIn("pending_send", self.bot1())
+                self.assertEqual(self.bot1()["own_promises"]["pending"], self.DIT_APRES_REPRISE)
+                etat, sortie = self.cycle(None if redemarrage else etat)
+                self.assertEqual([sortie.count(a) for a in ANNONCES], [0, 0, 0])
+                self.assertEqual(self.envoi.call_count, 4)
+                self.doCleanups()
+
+    def test_l_reprise_jamais_annoncee_si_l_envoi_est_abandonne(self):
+        for comportements, marque, cycles in (
+            ([faux_site.ERREUR_500] * 3, "[send-failed]", 7), ([faux_site.SOURDINE], "[send-muted]", 1),
+        ):
+            with self.subTest(marque=marque):
+                self.setUp()
+                etat = self.scenario_reprise()
+                self.site.comportements = list(comportements)
+                journal = ""
+                for _ in range(cycles):
+                    etat, sortie = self.cycle(etat)
+                    journal += sortie
+                self.assertEqual((sortie.count(marque), journal.count(marque)), (1, 1))
+                for annonce in ANNONCES:
+                    self.assertEqual(journal.count(annonce), 0, annonce)
+                # Les lignes sont parties avec pending_send ; BUR compte de nouveau comme
+                # dit à l'Angleterre, PIC ne lui est pas promis.
+                self.assertNotIn("pending_send", self.bot1())
+                self.assertEqual(self.bot1()["own_promises"]["pending"], self.DIT_AVANT_REPRISE)
+                self.assertEqual(self.par_destinataire(), {"ENGLAND": [], "GERMANY": [PIC]})
+                etat, sortie = self.cycle(etat)
+                self.assertEqual([sortie.count(a) for a in ANNONCES], [0, 0, 0])
+                self.doCleanups()
+
+    def test_l_reprise_annoncee_une_fois_si_l_etat_ne_s_ecrit_pas_a_la_confirmation(self):
+        # Message stocké (200), mais l'écriture de l'état qui retire pending_send échoue :
+        # rien n'est annoncé à ce cycle ; au suivant, la relecture confirme et annonce, une fois.
+        etat = self.scenario_reprise()
+
+        def panne_a_la_confirmation(source, cible, reel=os.replace):
+            if Path(str(cible)) == self.etat:
+                ecrit = json.loads(Path(str(source)).read_text())["bot1:7"]
+                if "pending_send" not in ecrit and str(T4) in ecrit["replied_ts"]:
+                    raise OSError(errno.ENOSPC, "No space left on device")
+            return reel(source, cible)
+
+        with mock.patch.object(bot.os, "replace", panne_a_la_confirmation):
+            etat, sortie = self.cycle(etat)
+        self.assertIsNone(etat)
+        self.assertEqual((sortie.count("[silent]"), sortie.count("sent (status")), (1, 0))
+        self.assertEqual([sortie.count(a) for a in ANNONCES], [0, 0, 0])
+        etat, sortie = self.cycle(etat)
+        self.assertEqual(sortie.count("[send-confirmed]"), 1)
+        self.assertEqual([sortie.count(a) for a in ANNONCES], [0, 1, 1])
+        etat, sortie = self.cycle(etat)
+        self.assertEqual([sortie.count(a) for a in ANNONCES], [0, 0, 0])
+        self.assertEqual((self.envoi.call_count, len(self.site.messages)), (4, 4))
+
     TEXTE_M = "D'accord & merci : été, ça < 3 > 2\r\nligne 2 \"citée\" &amp; <br />fin  "
 
     def test_m_texte_avec_accents_et_balises(self):
@@ -1453,6 +1576,13 @@ class Envois(Montage, unittest.TestCase):
             ({"ts": str(T3), "recipient": "ENGLAND", "text": "x", "phase": "S1901M",
               "added": {"by_recipient": [], "commitments": []}, "removed": [],
               "own_pending": None, "journal": "[betrayal]", "attempts": 1, "rereads": 0}, str(T3)),
+            ({"ts": str(T3 + 1), "recipient": "ENGLAND", "text": "x", "phase": "S1901M",
+              "added": {"by_recipient": [], "commitments": []}, "removed": [],
+              "own_pending": None, "journal": ["  [betrayal] x", 3], "attempts": 1, "rereads": 0},
+             str(T3 + 1)),
+            ({"ts": str(T3 + 2), "recipient": "ENGLAND", "text": "x", "phase": "S1901M",
+              "added": {"by_recipient": [], "commitments": []}, "removed": [],
+              "own_pending": None, "journal": None, "attempts": 1, "rereads": 0}, str(T3 + 2)),
         ):
             with self.subTest(mal_forme=mal_forme):
                 etat["bot1:7"]["pending_send"] = mal_forme
@@ -1463,6 +1593,20 @@ class Envois(Montage, unittest.TestCase):
                 self.assertEqual(marque in self.bot1()["replied_ts"], bool(marque))
                 self.assertEqual(self.envoi.call_count, 1)
                 self.assertEqual(self.promis(), [BUR])
+
+    def test_validite_du_journal_d_un_pending_send(self):
+        # Clé `journal` : absente (état d'avant le journal) ou liste de chaînes, vide comprise.
+        sans = {"ts": str(T1), "recipient": "ENGLAND", "text": "x", "phase": "S1901M",
+                "added": {"by_recipient": [], "commitments": []}, "removed": [],
+                "own_pending": None, "attempts": 1, "rereads": 0}
+        self.assertTrue(bot._valid_pending_send(sans))
+        for journal, attendu in (
+            ([], True), (["  [betrayal] x"], True), (["a", "b"], True),
+            ("[betrayal]", False), (None, False), ({}, False), (3, False), (True, False),
+            (["a", 3], False), ([None], False), ([["a"]], False), ([{}], False),
+        ):
+            with self.subTest(journal=journal):
+                self.assertIs(bot._valid_pending_send(dict(sans, journal=journal)), attendu)
 
     def test_pending_send_mal_forme_message_stocke_jamais_renvoye(self):
         # Scénario de l'audit : 500 mais message stocké, puis `attempts` retiré à la
