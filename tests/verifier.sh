@@ -45,13 +45,17 @@ fi
 # Jeu d'essai figé (ADR 0006, décision 3), contrôlé par script : emplacement unique (aucune table
 # de recherche dans un .json ou .jsonl hors de tests/reference/), clés en liste blanche, aucune
 # chaîne qui ne soit un ordre, une puissance, une phase ou un mot du format, plafond de 512 Kio.
-# Passe sur un dossier absent ou vide. Les contrôles de plus bas (chemin personnel, jeton,
+# Passe sur un dossier absent ou vide. Avec lui, deux tests sur les seuls noms des fichiers du dépôt
+# (ADR 0006, annotation, point D) : aucun fichier d'état d'une instance ni aucune de ses copies
+# (current_plans, pseudo_commitments, claude_dialogue_state en .json*), extensions en liste fermée
+# (EXTENSIONS_ADMISES de tests/reference_jeu.py : une extension nouvelle s'y ajoute dans le commit
+# qui introduit le fichier). Les contrôles de plus bas (chemin personnel, jeton,
 # donnée d'exécution) s'appliquent aussi à ce dossier.
 if sortie=$(env -u PYTHONDONTWRITEBYTECODE python3 tests/reference_jeu.py controler 2>&1); then
   echo "$sortie" | tail -n 1
 else
   echo "$sortie"
-  ko "tests/reference/ ou une table hors de ce dossier (voir ci-dessus ; ADR 0006)"
+  ko "tests/reference/, une table hors de ce dossier ou un nom de fichier non admis (voir ci-dessus ; ADR 0006)"
 fi
 # Couche D de la référence de non-régression (#31) : fonctions pures rejouées sur le jeu d'essai,
 # comparées à l'identique à ses attendus. Ne compare rien, et le dit, tant que le jeu est vide.

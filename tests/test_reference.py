@@ -763,6 +763,101 @@ class Emplacement(AvecJeu):
         self.assertEqual(reference_jeu.controler(reference_jeu.DOSSIER), [])
 
 
+class Noms(AvecJeu):
+    """Deux tests sur les seuls noms : fichiers d'état d'une instance, extensions en liste fermée."""
+
+    attendus = False
+
+    def noms(self, *fichiers):
+        return reference_jeu.controler_noms(self.racine, list(fichiers))
+
+    def test_fichiers_d_etat_refuses(self):
+        for relatif in ("logs/current_plans.json", "x/pseudo_commitments.json.bak", "claude_dialogue_state_3.json",
+                        "current_plans_copie.json", "a/b/current_plans.jsonl", "pseudo_commitments.json.gz",
+                        "claude_dialogue_state.json.tmp", "tests/reference/current_plans.json",
+                        "tests/reference/tables/pseudo_commitments.json", "Current_Plans.JSON"):
+            violations = [v for v in self.noms(relatif) if "fichier d'état" in v]
+            self.assertEqual(len(violations), 1, relatif)
+            self.assertTrue(violations[0].startswith(relatif + " : "), violations[0])
+            self.assertIn("décision 1", violations[0])
+
+    def test_un_nom_d_etat_en_json_n_est_refuse_qu_a_ce_titre(self):
+        self.assertEqual(len(self.noms("logs/current_plans.json")), 1)
+        self.assertEqual(len(self.noms("x/pseudo_commitments.json.bak")), 2)  # le nom, et l'extension .bak
+
+    def test_noms_voisins_admis(self):
+        self.assertEqual(self.noms(
+            "pseudo_commitments.py", "cicero/overlay/fairdiplomacy/utils/pseudo_commitments.py", "current_plans.md",
+            "tests/test_current_plans.json", "plans.json", "current_plans/notes.md", "claude_dialogue_state.py",
+        ), [])
+
+    def test_extensions_refusees(self):
+        for relatif, suffixe in (("releve.jsonl.gz", ".gz"), ("essai.log", ".log"), ("table.pkl", ".pkl"),
+                                 ("tests/mesure/m1.jsonl", ".jsonl"), ("a/table.json.bak", ".bak"), ("base.sqlite", ".sqlite"),
+                                 ("tests/reference/tables/S1901M.jsonl", ".jsonl"), ("table.JSON", ".JSON"),
+                                 ("x.tar.gz", ".gz"), (".cache.bin", ".bin")):
+            violations = self.noms(relatif)
+            self.assertEqual(len(violations), 1, relatif)
+            self.assertIn("%s : extension %s hors de la liste fermée" % (relatif, suffixe), violations[0])
+            # Le message dit quoi faire d'une extension légitime.
+            self.assertIn("ajouter son extension à EXTENSIONS_ADMISES (tests/reference_jeu.py) dans le commit qui l'introduit",
+                          violations[0])
+
+    def test_noms_sans_extension(self):
+        self.assertEqual(self.noms("Dockerfile", "cicero/overlay/Dockerfile", "LICENSE", "NOTICE", ".gitignore",
+                                   "a/.gitattributes", ".dockerignore"), [])
+        for relatif in ("releve", "tests/mesure/table", ".env", "a/.secret", "Makefile"):
+            violations = self.noms(relatif)
+            self.assertEqual(len(violations), 1, relatif)
+            self.assertIn("nom sans extension hors de la liste fermée", violations[0])
+            self.assertIn("ajouter son nom à NOMS_SANS_EXTENSION", violations[0])
+
+    def test_extension_d_un_nom(self):
+        for nom, suffixe in (("a/b.c/d", ""), ("a.json", ".json"), ("a.json.bak", ".bak"), (".gitignore", ""),
+                             (".a.b", ".b"), ("a.", "."), ("x/Dockerfile", "")):
+            self.assertEqual(reference_jeu.extension(nom), suffixe, nom)
+        self.assertEqual(len(self.noms("a.")), 1)
+
+    def test_les_listes_sont_celles_du_depot(self):
+        """Listes fermées : rien n'y figure qu'un fichier du dépôt ne porte (une entrée morte élargirait le contrôle)."""
+        fichiers = reference_jeu.fichiers_du_depot(reference_jeu.RACINE)
+        self.assertEqual({reference_jeu.extension(f) for f in fichiers} - {""}, set(reference_jeu.EXTENSIONS_ADMISES))
+        self.assertEqual({f.rsplit("/", 1)[-1] for f in fichiers if not reference_jeu.extension(f)},
+                         set(reference_jeu.NOMS_SANS_EXTENSION))
+
+    def test_le_depot_n_a_aucun_nom_refuse(self):
+        self.assertEqual(reference_jeu.controler_noms(reference_jeu.RACINE), [])
+
+    def test_le_jeu_a_sa_place_passe(self):
+        self.assertEqual(self.noms(*("tests/reference/" + f for f in reference_jeu.fichiers_du_jeu(self.dossier))), [])
+
+    def test_fichier_non_suivi_non_ignore(self):
+        """La liste contrôlée est celle du contrôle d'emplacement : suivis, et non suivis non ignorés."""
+        git = depot_git(self.racine)
+        (self.racine / "logs").mkdir()
+        (self.racine / "logs" / "current_plans.json").write_text("{}\n", encoding="utf-8")
+        (self.racine / "essai.log").write_text("", encoding="utf-8")
+        (self.racine / "ignore.log").write_text("", encoding="utf-8")
+        (self.racine / ".gitignore").write_text("ignore.log\n", encoding="utf-8")
+        with mock.patch.dict(os.environ, git.env, clear=True):
+            violations = reference_jeu.controler_noms(self.racine)
+        self.assertEqual([v.split(" : ")[0] for v in violations], ["essai.log", "logs/current_plans.json"])
+
+    def test_la_commande_controler_appelle_le_controle_des_noms(self):
+        """`controler` (celle de tests/verifier.sh) échoue sur un nom refusé, jeu conforme ou absent ; git interrogé une fois."""
+        for dossier in (self.dossier, self.racine / "nulle_part"):
+            arguments = ["controler", "--dossier", str(dossier), "--racine", str(self.racine)]
+            sortie, vus = io.StringIO(), []
+            with mock.patch.object(reference_jeu, "fichiers_du_depot",
+                                   lambda racine: vus.append(racine) or ["essai.log", "x/pseudo_commitments.json.bak"]), \
+                    contextlib.redirect_stdout(sortie):
+                self.assertEqual(reference_jeu.main(arguments), 1)
+                self.assertEqual(len(vus), 1)
+                self.assertEqual(reference_jeu.main(arguments + ["--sans-emplacement"]), 0)
+            self.assertIn("ÉCHEC : essai.log : extension .log", sortie.getvalue())
+            self.assertIn("ÉCHEC : x/pseudo_commitments.json.bak : nom d'un fichier d'état", sortie.getvalue())
+
+
 # ---------------------------------------------------------------------------
 # Couche D
 # ---------------------------------------------------------------------------

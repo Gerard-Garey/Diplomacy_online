@@ -9,7 +9,9 @@ Bibliothèque standard seule, ni amont/ ni conteneur. Trois usages :
     python3 tests/reference_jeu.py manifeste --dossier D
 
 `controler` est appelé par tests/verifier.sh (ADR 0006, décision 3) ; il passe sur un
-dossier absent ou vide. `reduire` transforme des relevés de tests/mesure/rejeu_moteur.py
+dossier absent ou vide. Avec le dossier, il contrôle le dépôt entier : emplacement unique
+des tables, et deux tests sur les seuls noms de fichiers (noms des fichiers d'état,
+extensions en liste fermée : `controler_noms`). `reduire` transforme des relevés de tests/mesure/rejeu_moteur.py
 (bruts, hors git) en jeu d'essai : seule la session principale le lance vers
 tests/reference/, après visa (ADR 0006, décision 6). `manifeste` refait la liste des
 fichiers et les tailles d'un jeu dont les fichiers ont changé (attendus régénérés).
@@ -55,6 +57,17 @@ PLAFOND_OCTETS = 512 * 1024  # ADR 0006, décision 3 : le dépasser demande une 
 # Mesuré sur les relevés m1_3_* (30 recherches) : l'ordre le plus long y fait 22 caractères.
 # 24 est la borne de l'ADR 0006 (« moins de 24 caractères »).
 LONGUEUR_ORDRE_MAX = 24
+# Contrôle des noms (ADR 0006, annotation du 2026-10-10, point D ; feuille de route, question 16), sur les
+# fichiers versionnés ou à versionner du dépôt entier. Il ne lit que des noms : ce qu'un nom ne dit pas
+# (table en littéral dans du code, fichier coupé) lui échappe, et l'ADR l'accepte par écrit.
+# Les trois fichiers d'état d'une instance (ADR 0006, décision 1), par le début de leur nom.
+NOMS_D_ETAT = ("current_plans", "pseudo_commitments", "claude_dialogue_state")
+# Listes fermées, mesurées sur les 106 fichiers du dépôt le 2026-10-10. Une extension ou un nom nouveau
+# s'ajoute ici, dans le commit qui introduit le fichier : la ligne se voit dans le diff.
+EXTENSIONS_ADMISES = (
+    ".py", ".md", ".sh", ".yml", ".patch", ".prototxt", ".json", ".exemple", ".txt", ".sql", ".php", ".js", ".env",
+)
+NOMS_SANS_EXTENSION = ("Dockerfile", "LICENSE", "NOTICE", ".gitignore", ".gitattributes", ".dockerignore")
 
 POWERS = ["AUSTRIA", "ENGLAND", "FRANCE", "GERMANY", "ITALY", "RUSSIA", "TURKEY"]
 # Lieux de la carte : VALID_LOC_STRS de dipcc/dipcc/cc/loc.cc, dans l'amont Cicero au commit
@@ -755,6 +768,54 @@ def controler_emplacement(racine=RACINE, fichiers=None):
     return violations
 
 
+def nom_d_etat(relatif):
+    """Vrai si le nom de base est celui d'un fichier d'état d'une instance ou d'une de ses copies.
+
+    Commence par l'un des NOMS_D_ETAT et contient « .json » : aussi `.json.bak`, `.json.gz`,
+    `.jsonl`, `current_plans_copie.json` ; pas `pseudo_commitments.py`. Sans égard à la casse.
+    """
+    nom = relatif.rsplit("/", 1)[-1].lower()
+    return nom.startswith(NOMS_D_ETAT) and ".json" in nom
+
+
+def extension(relatif):
+    """Dernière extension du nom de base, point compris ; "" s'il n'en a pas (`Dockerfile`, `.gitignore`)."""
+    nom = relatif.rsplit("/", 1)[-1]
+    return nom[nom.rindex("."):] if "." in nom[1:] else ""
+
+
+def controler_noms(racine=RACINE, fichiers=None):
+    """Deux tests sur les seuls noms des fichiers du dépôt, tests/reference/ compris.
+
+    Aucun fichier d'état d'une instance, sous aucune de ses formes (`nom_d_etat`) ; aucune
+    extension hors de EXTENSIONS_ADMISES, aucun nom sans extension hors de NOMS_SANS_EXTENSION.
+    Un fichier peut être refusé aux deux titres : chaque refus a sa ligne.
+    """
+    fichiers = fichiers_du_depot(racine) if fichiers is None else fichiers
+    violations = []
+    for relatif in sorted(fichiers):
+        if nom_d_etat(relatif):
+            violations.append(
+                "%s : nom d'un fichier d'état d'une instance (%s*.json*) : il n'entre pas au dépôt, "
+                "même en copie ou en sauvegarde (ADR 0006, décision 1)" % (relatif, ", ".join(NOMS_D_ETAT))
+            )
+        suffixe, nom = extension(relatif), relatif.rsplit("/", 1)[-1]
+        if suffixe and suffixe not in EXTENSIONS_ADMISES:
+            violations.append(
+                "%s : extension %s hors de la liste fermée (%s) : un relevé, une sauvegarde ou une table sous un autre "
+                "type n'entre pas au dépôt (ADR 0006). Si le fichier est légitime, ajouter son extension à "
+                "EXTENSIONS_ADMISES (tests/reference_jeu.py) dans le commit qui l'introduit"
+                % (relatif, suffixe, " ".join(EXTENSIONS_ADMISES))
+            )
+        elif not suffixe and nom not in NOMS_SANS_EXTENSION:
+            violations.append(
+                "%s : nom sans extension hors de la liste fermée (%s). Si le fichier est légitime, ajouter son nom à "
+                "NOMS_SANS_EXTENSION (tests/reference_jeu.py) dans le commit qui l'introduit"
+                % (relatif, " ".join(NOMS_SANS_EXTENSION))
+            )
+    return violations
+
+
 # ---------------------------------------------------------------------------
 # Ligne de commande
 # ---------------------------------------------------------------------------
@@ -789,10 +850,11 @@ def reduire_fichiers(chemins, recherche="A", tirage=0, a_sec=False):
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     commandes = p.add_subparsers(dest="action")  # pas « commande » : c'est une option de `reduire`
-    c = commandes.add_parser("controler", help="contrôle du jeu d'essai et de l'emplacement unique (tests/verifier.sh)")
+    c = commandes.add_parser("controler", help="contrôle du jeu d'essai, de l'emplacement unique et des noms (tests/verifier.sh)")
     c.add_argument("--dossier", default=str(DOSSIER))
-    c.add_argument("--racine", default=str(RACINE), help="dépôt où chercher une table hors de tests/reference/")
-    c.add_argument("--sans-emplacement", action="store_true", help="ne contrôle que le dossier")
+    c.add_argument("--racine", default=str(RACINE),
+                   help="dépôt où chercher une table hors de tests/reference/ et un nom de fichier non admis")
+    c.add_argument("--sans-emplacement", action="store_true", help="ne contrôle que le dossier (ni emplacement, ni noms)")
     r = commandes.add_parser("reduire", help="relevés de rejeu_moteur.py -> jeu d'essai (session principale, après visa)")
     r.add_argument("releves", nargs="+")
     r.add_argument("--historique", required=True, help="historique des ordres (capture_reference.py historique)")
@@ -814,7 +876,8 @@ def main(argv=None):
     if args.action == "controler":
         violations = controler(args.dossier)
         if not args.sans_emplacement:
-            violations += controler_emplacement(args.racine)
+            fichiers = fichiers_du_depot(args.racine)
+            violations += controler_emplacement(args.racine, fichiers) + controler_noms(args.racine, fichiers)
         for violation in violations:
             print("ÉCHEC : %s" % violation)
         presents = fichiers_du_jeu(args.dossier)
