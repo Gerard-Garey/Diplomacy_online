@@ -53,6 +53,19 @@ Les bots soumettent leurs ordres en quelques minutes, et le bot de dialogue rel�
 - les journaux du moteur (valeur et probabilité de chaque action, par partie et par puissance) sont dans `amont/cicero/journaux_moteur` ;
 - `bot-service` (bots élémentaires qui tiennent leurs positions) reste dans le dépôt sous le profil `bots`, qu'aucun script ne lance. **Ne pas le démarrer à côté de Cicero** : il validerait des ordres à sa place.
 
+### Partie 100 % bots (essais)
+
+Pour obtenir des positions sans jouer soi-même, une partie dont les sept puissances sont tenues par les bots se crée en ligne de commande, pile démarrée :
+
+```bash
+docker exec -e XDEBUG_MODE=off webdiplomacy-php-fpm-1 \
+  php /application/gamecreateBotsOnly.php <nom>
+```
+
+- `<nom>` : 1 à 50 caractères parmi `A-Z a-z 0-9 _ . -`, le premier alphanumérique ; un nom déjà pris est refusé, ainsi que tout nom commençant par « SB » (`SB_x`, `SBtest`, `Sbires`), que webDiplomacy prendrait pour un bac à sable et ne résoudrait jamais ;
+- codes de sortie : 0, avec `gameID=<n>` en dernière ligne ; 2, mauvais usage (rien n'est lu en base) ; 1, échec (rien n'est créé) ;
+- le script ne répond qu'en ligne de commande (403 par le site) ; les bots ne s'y parlent pas entre eux ; rien n'arrête la partie d'elle-même avant sa fin, elle se met en pause par SQL. Détail : `docs/doc/architecture.md` § 5.
+
 `./install.sh` est relançable : une étape déjà faite est sautée. Options : `--sans-build`, `--sans-modeles`.
 
 | Commande | Effet |
