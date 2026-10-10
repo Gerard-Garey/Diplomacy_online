@@ -18,6 +18,7 @@ import os
 import random
 import re
 import shutil
+import subprocess
 import sys
 import tempfile
 import types
@@ -104,6 +105,31 @@ def generer(dossier, *options):
     return code, sortie.getvalue()
 
 
+def depot_git(racine):
+    """Fait de `racine` un dépôt git commité (un harnais, un fichier d'overlay, ce qui s'y trouve déjà) ; rend l'appel git.
+
+    Dépôt temporaire, sans rapport avec celui du projet : la configuration et les
+    variables GIT_* de l'appelant sont écartées, pour que le test dise la même chose partout.
+    """
+    env = {cle: valeur for cle, valeur in os.environ.items() if not cle.startswith("GIT_")}
+    env.update(GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1")
+
+    def git(*arguments):
+        return subprocess.run(
+            ["git", "-C", str(racine), "-c", "user.name=essai", "-c", "user.email=essai@example.invalid"] + list(arguments),
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env, check=True).stdout.decode("utf-8", "replace")
+    (racine / "tests").mkdir(exist_ok=True)
+    (racine / "tests" / "harnais.py").write_text("harnais = 1\n", encoding="utf-8")
+    (racine / "cicero" / "overlay").mkdir(parents=True)
+    (racine / "cicero" / "overlay" / "bot.py").write_text("bot = 1\n", encoding="utf-8")
+    (racine / "ailleurs.md").write_text("hors des mesures\n", encoding="utf-8")
+    git("init", "-q")
+    git("add", "-A")
+    git("commit", "-q", "-m", "depot d'essai")
+    git.env = env
+    return git
+
+
 _GABARITS = {}
 
 
@@ -153,6 +179,11 @@ class AvecJeu(unittest.TestCase):
 
     def generer(self, *options):
         return generer(self.dossier, *options)
+
+    def arbre(self, git):
+        """arbre_modifie, git non doublé, sur le dépôt du test (voir depot_git)."""
+        with mock.patch.object(couche_d, "RACINE", self.racine), mock.patch.dict(os.environ, git.env, clear=True):
+            return couche_d.arbre_modifie()
 
     def modifier(self, relatif, changement, manifeste=True):
         """Applique `changement` au JSON d'un fichier du jeu, puis refait le manifeste (sauf `manifeste` faux)."""
@@ -1013,6 +1044,32 @@ class CoucheD(AvecJeu):
             self.assertIsNone(couche_d.arbre_modifie())
             self.assertIsNone(couche_d.sha_du_depot())
 
+    def test_l_arbre_controle_exclut_le_jeu_d_essai(self):
+        """Les quatre cas, sur un vrai dépôt : seul ce qui est hors de tests/reference/ compte."""
+        git = depot_git(self.racine)
+        self.assertEqual(self.arbre(git), [])
+        (self.dossier / "non_suivi.json").write_text("{}\n", encoding="utf-8")
+        self.assertEqual(self.arbre(git), [])
+        with (self.dossier / "manifeste.json").open("a", encoding="utf-8") as f:
+            f.write("\n")
+        self.assertEqual(self.arbre(git), [])
+        (self.racine / "tests" / "reference_voisin.py").write_text("", encoding="utf-8")
+        self.assertEqual(self.arbre(git), ["?? tests/reference_voisin.py"])
+        (self.racine / "tests" / "reference_voisin.py").unlink()
+        (self.racine / "tests" / "harnais.py").write_text("harnais = 2\n", encoding="utf-8")
+        (self.racine / "cicero" / "overlay" / "bot.py").write_text("bot = 2\n", encoding="utf-8")
+        (self.racine / "ailleurs.md").write_text("hors des mesures\n", encoding="utf-8")
+        self.assertEqual(self.arbre(git), [" M cicero/overlay/bot.py", " M tests/harnais.py"])
+        (self.racine / "tests" / "harnais.py").write_text("harnais = 1\n", encoding="utf-8")
+        (self.racine / "cicero" / "overlay" / "bot.py").write_text("bot = 1\n", encoding="utf-8")
+        self.assertEqual(self.arbre(git), [])
+        # Renommage à cheval, dans un sens puis dans l'autre : vu par son côté contrôlé.
+        git("mv", "tests/harnais.py", "tests/reference/harnais.py")
+        self.assertEqual(self.arbre(git), ["D  tests/harnais.py"])
+        git("mv", "tests/reference/harnais.py", "tests/harnais.py")
+        git("mv", "tests/reference/manifeste.json", "tests/manifeste.json")
+        self.assertEqual(self.arbre(git), ["AM tests/manifeste.json"])
+
     def test_les_textes_de_d4(self):
         code, sortie = self.lancer("--textes", "S1901M", "france")
         self.assertEqual(code, 0)
@@ -1026,6 +1083,64 @@ class CoucheD(AvecJeu):
             texte = fichier.read_text(encoding="utf-8")
             for interdit in ("Your current plan", "Promises you", "You are playing", "entendu", "bonjour"):
                 self.assertNotIn(interdit, texte)
+
+
+class Sequence(AvecJeu):
+    """La séquence de la campagne sur un vrai dépôt git : jeu posé (non suivi), puis --generer, sans rien commiter entre."""
+
+    attendus = False
+
+    def setUp(self):
+        super().setUp()
+        shutil.rmtree(str(self.dossier))  # le dépôt est commité sans jeu d'essai, comme avant la campagne
+        self.git = depot_git(self.racine)
+        self.sha = self.git("rev-parse", "HEAD").strip()
+        shutil.copytree(str(gabarit()["sans"] / "tests" / "reference"), str(self.dossier))
+
+    def generer(self, *options):
+        """(code, sortie) de --generer, git non doublé : seule la racine du dépôt est déplacée."""
+        sortie = io.StringIO()
+        with mock.patch.object(couche_d, "RACINE", self.racine), mock.patch.dict(os.environ, self.git.env, clear=True), \
+                contextlib.redirect_stdout(sortie), contextlib.redirect_stderr(sortie):
+            code = couche_d.main(["--jeu", str(self.dossier), "--generer", "--date", "2026-01-01"] + list(options))
+        return code, sortie.getvalue()
+
+    def test_generer_apres_reduire_sans_rien_commiter(self):
+        self.assertIn("?? tests/reference/", self.git("status", "--porcelain"))
+        code, sortie = self.generer()
+        self.assertEqual(code, 0, sortie)
+        manifeste = json.loads((self.dossier / "manifeste.json").read_text(encoding="utf-8"))
+        self.assertEqual(manifeste["attendus"]["sha_code"], self.sha)
+        self.assertEqual(reference_jeu.controler(self.dossier), [])
+        self.assertEqual(self.lancer()[0], 0)
+        # Une seconde génération, attendus déjà posés et toujours non suivis : même réponse.
+        code, sortie = self.generer()
+        self.assertEqual(code, 0, sortie)
+        self.assertIn("Attendus écrasés : aucune grandeur ne change.", sortie)
+
+    def test_un_harnais_modifie_fait_toujours_refuser(self):
+        for relatif, ligne in (("tests/harnais.py", " M tests/harnais.py"), ("cicero/overlay/bot.py", " M cicero/overlay/bot.py"),
+                               ("tests/nouveau.py", "?? tests/nouveau.py")):
+            fichier = self.racine / relatif
+            avant = fichier.read_bytes() if fichier.exists() else None
+            fichier.write_text("modifie = True\n", encoding="utf-8")
+            code, sortie = self.generer()
+            self.assertEqual(code, 2, sortie)
+            self.assertIn("arbre de travail modifié sous cicero/overlay et tests, hors tests/reference (1 fichier(s), dont %s)"
+                          % ligne.strip(), sortie)
+            self.assertFalse((self.dossier / "attendus").exists())
+            self.assertNotIn("attendus", json.loads((self.dossier / "manifeste.json").read_text(encoding="utf-8")))
+            if avant is None:
+                fichier.unlink()
+            else:
+                fichier.write_bytes(avant)
+        code, sortie = self.generer("--arbre-modifie")  # arbre redevenu propre : le SHA n'est pas marqué
+        self.assertEqual(code, 0, sortie)
+        (self.racine / "tests" / "harnais.py").write_text("modifie = True\n", encoding="utf-8")
+        code, sortie = self.generer("--arbre-modifie")
+        self.assertEqual(code, 0, sortie)
+        manifeste = json.loads((self.dossier / "manifeste.json").read_text(encoding="utf-8"))
+        self.assertEqual(manifeste["attendus"]["sha_code"], self.sha + "-modifie")
 
 
 class Mutations(AvecJeu):

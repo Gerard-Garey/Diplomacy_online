@@ -15,7 +15,9 @@ tests/banc_promesses.py. Lancée par tests/verifier.sh.
 deviennent (rien n'est écrasé sans être montré). Il lit l'état du dépôt par git
 (lecture seule, --no-optional-locks) : sur un arbre de travail modifié il refuse,
 sauf --arbre-modifie, qui note alors le SHA suivi de « -modifie » ; sans git, --sha
-est obligatoire. La batterie, elle, n'appelle jamais git ici.
+est obligatoire. L'arbre contrôlé est cicero/overlay et tests/, sauf tests/reference/ :
+le jeu d'essai que `reference_jeu.py reduire` vient d'y poser n'est pas encore suivi,
+et les attendus s'y écrivent. La batterie, elle, n'appelle jamais git ici.
 
 Tant que le jeu d'essai est absent ou vide, rien n'est comparé : la commande le dit
 et rend 0. Sinon, pour chaque table (phase, puissance) :
@@ -851,13 +853,18 @@ def commande_mutations(jeu, args):
 
 
 MESURES = ("cicero/overlay", "tests")  # ce dont les attendus dépendent : le code mesuré et le harnais
+# Le jeu d'essai est la donnée produite, ni le code mesuré ni le harnais : posé juste avant --generer,
+# il n'est pas encore suivi, et un contrôle qui le compterait refuserait toujours. Pathspec git, relatif
+# à RACINE ; un renommage à cheval reste vu par son côté contrôlé (« D » ou « A » au lieu de « R »).
+HORS_MESURES = "tests/reference"
 
 
 def arbre_modifie():
-    """Fichiers modifiés ou non suivis sous MESURES, d'après git (lecture seule) ; None si git ne répond pas."""
+    """Fichiers modifiés ou non suivis sous MESURES, hors HORS_MESURES, d'après git (lecture seule) ; None si git ne répond pas."""
     try:
         sortie = subprocess.run(
-            ["git", "--no-optional-locks", "-C", str(RACINE), "status", "--porcelain", "--"] + list(MESURES),
+            ["git", "--no-optional-locks", "-C", str(RACINE), "status", "--porcelain", "--"] + list(MESURES)
+            + [":(exclude)" + HORS_MESURES],
             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
         )
     except OSError:
@@ -890,9 +897,10 @@ def commande_generer(jeu, args):
         return 2
     if modifies:
         if not args.arbre_modifie:
-            print("REFUS : arbre de travail modifié sous %s (%d fichier(s), dont %s) : le SHA noté ne dirait pas "
-                  "quel code a produit les attendus. Commiter d'abord, ou --arbre-modifie (le SHA est alors "
-                  "suivi de « -modifie »)." % (" et ".join(MESURES), len(modifies), modifies[0].strip()), file=sys.stderr)
+            print("REFUS : arbre de travail modifié sous %s, hors %s (%d fichier(s), dont %s) : le SHA noté ne "
+                  "dirait pas quel code a produit les attendus. Commiter d'abord, ou --arbre-modifie (le SHA est "
+                  "alors suivi de « -modifie »)." % (
+                      " et ".join(MESURES), HORS_MESURES, len(modifies), modifies[0].strip()), file=sys.stderr)
             return 2
         sha += "-modifie"
     obtenu = calculer(jeu, scenarios_fixes=False)
