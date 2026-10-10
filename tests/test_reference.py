@@ -1634,7 +1634,40 @@ class Capture(unittest.TestCase):
         self.assertLess(sortie.index("capture_reference.py identite"), sortie.index("docker stop"))
         self.assertIn("--identite amont/capture-reference/resultats/identite_capture.json", sortie)
         self.assertIn("cp -a amont/capture-reference/resultats <dossier de conservation hors du dépôt>/", sortie)
-        self.assertIn("43 lancements, 241 recherches ; durée estimée des recherches : 2 h 22", sortie)
+        self.assertIn("43 lancements, 241 recherches ; durée estimée des recherches : 3 h 07", sortie)
+
+    def test_commandes_de_la_couche_r(self):
+        """Les 21 positions répétées, 5 tirages A + B, sans seconde passe, dans un dossier à part ; rien n'est relancé (#33)."""
+        sortie = self.commandes("--couche-r")
+        recherches = [l.split() for l in sortie.splitlines() if "rejeu_moteur.py" in l]
+        self.assertEqual([(l[3], l[4]) for l in recherches], list(capture_reference.POSITIONS_REPETEES))
+        self.assertEqual(len(recherches), 21)
+        for ligne in recherches:
+            self.assertEqual((ligne[5], ligne[-2:]), ("5", ["--engagements", "auto:prefere"]))
+            self.assertIn("--historique /mesure/resultats/historique_3.json --score sos --minutes-de-phase 4320", " ".join(ligne))
+        self.assertNotIn("--etiquette", sortie)
+        self.assertNotIn("docker start", sortie)
+        self.assertNotIn("capture-reference", sortie)
+        self.assertNotIn("reference_jeu.py reduire", sortie)
+        self.assertEqual(sortie.count('-v "$PWD/amont/couche-r:/mesure"'), 21)
+        # L'état initial de cicero-orders est relevé avant l'arrêt, et son rappel clôt la suite.
+        self.assertLess(sortie.index("docker inspect --format '{{.State.Status}}' cicero-orders"), sortie.index("docker stop cicero-orders"))
+        self.assertLess(sortie.index("docker stop cicero-orders"), sortie.index("rejeu_moteur.py"))
+        self.assertIn("le remettre à la main dans l'état noté", sortie.splitlines()[-1])
+        self.assertIn("cp tests/reference/historique.json amont/couche-r/resultats/historique_3.json", sortie)
+        self.assertIn("python3 tests/reference_couche_r.py comparer amont/couche-r/resultats --sortie amont/couche-r/couche_r.json", sortie)
+        # 21 x (46 + 5 x (50,5 + 24,1)) = 8 799 s = 2 h 26.
+        self.assertIn("21 lancements, 210 recherches ; durée estimée : 2 h 26", sortie)
+        trois = self.commandes("--couche-r", "--tirages", "3", "--repetees", "S1902M")
+        self.assertEqual([l.split()[3:6] for l in trois.splitlines() if "rejeu_moteur.py" in l],
+                         [["S1902M", p, "3"] for p in capture_reference.commun.POWERS])
+        # Exécution réduite ou relance d'une position : la comparaison nomme ce qu'elle attend, dans un autre dossier.
+        self.assertIn("--positions S1902M:AUSTRIA S1902M:ENGLAND", trois)
+        self.assertNotIn("--positions", sortie)
+        une = self.commandes("--couche-r", "--repetees", "S1903M:FRANCE", "--dossier", "amont/couche-r-relance")
+        self.assertIn("comparer amont/couche-r-relance/resultats --sortie amont/couche-r-relance/couche_r.json "
+                      "--positions S1903M:FRANCE", une)
+        self.assertIn("mkdir amont/couche-r-relance && ", une)
 
     def test_unranked_est_note_en_sos(self):
         """Le potType de la partie 3, « Unranked » : SCORING_SOS dans webdip_state_to_game, d'où --score sos par défaut."""
@@ -1647,11 +1680,13 @@ class Capture(unittest.TestCase):
             )
 
     def test_duree_estimee(self):
-        """Par lancement 23 s, par tirage 41,3 s (A) et 19,3 s de plus avec engagement (B)."""
-        self.assertAlmostEqual(capture_reference.duree_estimee([("S1901M", "FRANCE", 5, "auto:prefere", None)]), 23 + 5 * 60.6)
-        self.assertAlmostEqual(capture_reference.duree_estimee([("F1901M", "FRANCE", 1, "aucun", None)]), 23 + 41.3)
+        """Par lancement 46 s, par tirage 50,5 s (A) et 24,1 s de plus avec engagement (B) : mesures du 2026-10-10."""
+        self.assertEqual(capture_reference.DUREES, {"A": 50.5, "B": 24.1, "lancement": 46.0})
+        self.assertAlmostEqual(capture_reference.duree_estimee([("S1901M", "FRANCE", 5, "auto:prefere", None)]), 46 + 5 * 74.6)
+        self.assertAlmostEqual(capture_reference.duree_estimee([("F1901M", "FRANCE", 1, "aucun", None)]), 46 + 50.5)
         plan = capture_reference.plan_de_campagne(capture_reference.PHASES_DE_MOUVEMENT, capture_reference.POSITIONS_REPETEES, 5)
-        self.assertAlmostEqual(capture_reference.duree_estimee(plan), 43 * 23 + 110 * 60.6 + 21 * 41.3)
+        # 11 244,5 s, soit 3 h 07 ; la campagne du 2026-10-10 a duré 11 314 s (son journal).
+        self.assertAlmostEqual(capture_reference.duree_estimee(plan), 43 * 46 + 110 * 74.6 + 21 * 50.5)
 
     def test_positions_repetees_donnees_en_couples(self):
         self.assertEqual(capture_reference.lire_positions(["S1902M:france", "F1901M", "S1902M:FRANCE"]),

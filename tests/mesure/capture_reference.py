@@ -13,12 +13,15 @@ Trois outils, dont rejeu_moteur.py se sert (--historique, relevé `arguments_exp
     python /mesure/capture_reference.py historique GAMEID --sortie /mesure/resultats/historique_GAMEID.json
     python /mesure/capture_reference.py comparer GAMEID --historique /mesure/resultats/historique_GAMEID.json
     python /mesure/capture_reference.py commandes GAMEID [--phases ...] [--repetees PHASE[:PUISSANCE] ...] [--tirages 5]
+    python3 tests/mesure/capture_reference.py commandes GAMEID --couche-r [--tirages 5]     (lot de la couche R)
     python3 tests/mesure/capture_reference.py identite --dossier D --sha SHA --image ID     (sur le poste, au lancement)
 
 `historique` et `comparer` lisent le site (GET seulement) et ne lancent aucune
 recherche. `comparer` vérifie, phase par phase, que la position rejouée
 depuis l'historique est celle que rend le site (get_state, clé du plateau).
-`commandes` n'accède à rien : il imprime les commandes de la campagne de capture.
+`commandes` n'accède à rien : il imprime les commandes de la campagne de capture, ou,
+avec --couche-r, celles d'un lot de la couche R (les positions répétées, rejouées pour
+tests/reference_couche_r.py comparer ; cette suite-là ne relance pas cicero-orders, #33).
 --dry-run (historique, comparer) : ni site ni pydipcc, une partie doublée de deux
 phases fait tourner l'extraction, le rejeu et la comparaison.
 
@@ -332,9 +335,12 @@ POSITIONS_REPETEES = (
 # Seconde passe d'une position répétée, dans un fichier distinct : contrôle d'indépendance des lancements.
 SECONDE_PASSE = (("S1903M", "FRANCE"),)
 ETIQUETTE_SECONDE_PASSE = "passe2"
-# Mesuré sur les 30 recherches du 2026-10-03 (duree_s des relevés m1_3_*) : recherche A 41,3 s et B 19,3 s
-# en moyenne ; environ 23 s de démarrage par lancement (écart des horodatages de deux fichiers successifs).
-DUREES = {"A": 41.3, "B": 19.3, "lancement": 23.0}
+# Lot de la couche R (#31, critère 3) : les positions répétées, rejouées dans un dossier à part.
+DOSSIER_COUCHE_R = "amont/couche-r"
+# Mesuré sur la campagne du 2026-10-10 (43 lancements, 241 recherches) : recherche A 50,5 s (131 recherches) et
+# B 24,1 s (110) en moyenne, d'après les duree_s des relevés ; démarrage d'un lancement, 46 s en médiane (durée
+# du lancement dans le journal de la campagne, moins la somme de ses recherches ; de 22 à 67 s).
+DUREES = {"A": 50.5, "B": 24.1, "lancement": 46.0}
 
 
 def lire_positions(valeurs):
@@ -388,7 +394,7 @@ def commandes_de_campagne(game_id, phases, repetees, tirages, score, minutes_de_
     secondes = duree_estimee(lancements)
     lignes = [
         "# Depuis la racine du dépôt. cicero-orders est arrêté pour les recherches (GPU de 8 Go), après annonce.",
-        "# %d lancements, %d recherches ; durée estimée des recherches : %d h %02d (mesures du 2026-10-03)." % (
+        "# %d lancements, %d recherches ; durée estimée des recherches : %d h %02d (mesures du 2026-10-10)." % (
             len(lancements), sum(n * (2 if e != "aucun" else 1) for _p, _q, n, e, _x in lancements),
             secondes // 3600, secondes % 3600 // 60),
         "mkdir -p %s/resultats && cp tests/mesure/* %s/" % (dossier, dossier),
@@ -428,6 +434,52 @@ def commandes_de_campagne(game_id, phases, repetees, tirages, score, minutes_de_
     return lignes
 
 
+def commandes_de_la_couche_r(game_id, repetees, tirages, score, minutes_de_phase, dossier=DOSSIER_COUCHE_R):
+    """Les commandes d'un lot de la couche R, dans l'ordre ; rien n'est lancé.
+
+    Un lancement par position répétée : `tirages` tirages A + B (--engagements
+    auto:prefere), sans seconde passe, dans un dossier à part (un lot a un seul
+    fichier de relevés par position). L'historique est celui du jeu d'essai : aucun
+    accès au site. La suite arrête cicero-orders et ne le relance pas (#33) : elle
+    fait noter son état initial, à restaurer à la main. Si `repetees` n'est pas la
+    liste entière des positions répétées (relance d'une position, exécution réduite
+    à une phase), la comparaison imprimée les nomme par --positions.
+    """
+    historique = "/mesure/resultats/historique_%s.json" % game_id
+    avec_gpu = dict(gpu=" --gpus all", modeles=' -v "$PWD/amont/cicero/models:/opt/cicero/models:ro"', dossier=dossier)
+    reglages = " --score %s" % score + ("" if minutes_de_phase is None else " --minutes-de-phase %s" % minutes_de_phase)
+    lancements = [(phase, puissance, tirages, "auto:prefere", None) for phase, puissance in repetees]
+    secondes = duree_estimee(lancements)
+    lignes = [
+        "# Lot de la couche R (#31) : depuis la racine du dépôt, à la main ; jamais en CI ni dans un workflow.",
+        "# %d lancements, %d recherches ; durée estimée : %d h %02d (mesures du 2026-10-10)." % (
+            len(lancements), sum(2 * n for _p, _q, n, _e, _x in lancements), secondes // 3600, secondes % 3600 // 60),
+        "# Dossier neuf : un relevé plus ancien d'une même position ferait refuser le lot (un fichier par position).",
+        "mkdir %s && mkdir %s/resultats && cp tests/mesure/* %s/" % (dossier, dossier, dossier),
+        "# 1. Historique des ordres : celui du jeu d'essai (aucun accès au site).",
+        "cp tests/reference/historique.json %s/resultats/historique_%s.json" % (dossier, game_id),
+        "# 2. Recherches. cicero-orders doit être arrêté (GPU de 8 Go), après annonce. Cette suite ne le relance pas",
+        "#    (#33) : noter l'état initial que rend la ligne suivante, il se restaure à la main.",
+        "docker inspect --format '{{.State.Status}}' cicero-orders",
+        "docker stop cicero-orders",
+    ]
+    for phase, puissance, n, engagements, _etiquette in lancements:
+        lignes.append(DOCKER.format(
+            commande="python /mesure/rejeu_moteur.py %s %s %s %d --historique %s%s --engagements %s"
+            % (game_id, phase, puissance, n, historique, reglages, engagements),
+            **avec_gpu
+        ))
+    lignes += [
+        "# 3. Comparaison au résumé de la référence ; code de retour 0 : pas de régression, 1 : régression,",
+        "#    2 : non concluant ou lot invalide. Le détail reste sous amont/, hors git.",
+        "python3 tests/reference_couche_r.py comparer %s/resultats --sortie %s/couche_r.json%s" % (
+            dossier, dossier, "" if list(repetees) == list(POSITIONS_REPETEES)
+            else " --positions " + " ".join("%s:%s" % position for position in repetees)),
+        "# 4. cicero-orders est resté arrêté : le remettre à la main dans l'état noté à l'étape 2.",
+    ]
+    return lignes
+
+
 # ---------------------------------------------------------------------------
 # Ligne de commande
 # ---------------------------------------------------------------------------
@@ -451,6 +503,10 @@ def main(argv=None):
     k.add_argument("--repetees", nargs="*", metavar="PHASE[:PUISSANCE]",
                    help="positions à `--tirages` tirages A + B (défaut : les 21 de POSITIONS_REPETEES)")
     k.add_argument("--tirages", type=int, default=5)
+    k.add_argument("--couche-r", action="store_true",
+                   help="les commandes d'un lot de la couche R : les positions répétées seules, sans seconde passe, "
+                        "dans %s ; cicero-orders n'est pas relancé (--phases est sans objet)" % DOSSIER_COUCHE_R)
+    k.add_argument("--dossier", help="avec --couche-r : dossier du lot, neuf (défaut : %s)" % DOSSIER_COUCHE_R)
     # Partie 3, lu dans le statut du site par la session principale : potType « Unranked », que
     # webdip_state_to_game lit comme SCORING_SOS (SCORE_DU_POT), et des phases de 4 320 minutes.
     k.add_argument("--score", choices=sorted(SCORES), default="sos")
@@ -464,6 +520,10 @@ def main(argv=None):
 
     if args.commande == "commandes":
         repetees = list(POSITIONS_REPETEES) if args.repetees is None else lire_positions(args.repetees)
+        if args.couche_r:
+            print("\n".join(commandes_de_la_couche_r(
+                args.game_id, repetees, args.tirages, args.score, args.minutes_de_phase, args.dossier or DOSSIER_COUCHE_R)))
+            return 0
         print("\n".join(commandes_de_campagne(
             args.game_id, args.phases, repetees, args.tirages, args.score, args.minutes_de_phase)))
         return 0

@@ -21,6 +21,9 @@ et les attendus s'y écrivent. Ce dossier est gardé autrement : --generer comme
 le contrôle du jeu (`reference_jeu.controler`) et refuse, sans rien écrire, un jeu qui ne
 le passe pas -- une table retouchée à la main ne correspond plus au manifeste, et les
 empreintes ne sont pas refaites par-dessus. Le refus dit comment en sortir, selon le cas :
+le résumé des positions répétées (repetee.json, couche R) ou son bloc au manifeste -- le
+restaurer depuis git, ou le supprimer avec son bloc puis `reference_couche_r.py resumer`,
+jamais refaire ses empreintes ;
 une table ou l'historique qui ne correspondent plus au manifeste, et rien d'autre --
 `reference_jeu.py manifeste` si la modification est voulue, puis --generer ; toute autre
 violation (attendus/ retouché, par exemple) -- supprimer attendus/, `reference_jeu.py
@@ -906,10 +909,21 @@ def _table_ou_historique_retouche(violation):
         fichier == reference_jeu.HISTORIQUE or fichier.startswith(reference_jeu.TABLES + "/"))
 
 
+def _resume_en_cause(violation):
+    """Vrai si la violation est portée par le résumé des positions répétées (couche R) ou par son bloc au manifeste."""
+    parties = violation.split(" : ")
+    if parties[0] == reference_jeu.REPETEE:
+        return True
+    if len(parties) < 3 or parties[0] != reference_jeu.MANIFESTE:
+        return False
+    return parties[1].startswith("repetee") or (parties[1] == "fichiers" and parties[2].startswith(reference_jeu.REPETEE + " "))
+
+
 def refus_du_jeu(dossier, violations):
     """Le message du refus de --generer devant un jeu qui ne passe pas son contrôle : ce qui ne va pas, et la sortie.
 
-    Deux cas. Une table ou l'historique ne correspondent plus au manifeste, et rien d'autre : la
+    Trois cas. Le résumé des positions répétées (repetee.json) ou son bloc au manifeste sont en cause :
+    il se restaure ou se refait par `reference_couche_r.py resumer`, jamais par les empreintes. Une table ou l'historique ne correspondent plus au manifeste, et rien d'autre : la
     commande `manifeste` suffit, si la modification est voulue. Toute autre violation (attendus/
     retouché, clé non admise dans attendus/...) : les attendus sont à refaire, en trois temps. Ce
     chemin ne lève que les violations portées par attendus/ ou par le manifeste ; un fichier en
@@ -917,9 +931,20 @@ def refus_du_jeu(dossier, violations):
     dossier : le message le dit.
     """
     autres = [v for v in violations if not _table_ou_historique_retouche(v)]
+    du_resume = [v for v in violations if _resume_en_cause(v)]
     tete = "REFUS : le jeu d'essai de %s ne passe pas son contrôle (%d violation(s), dont : %s) ; rien n'est écrit. " % (
-        dossier, len(violations), (autres or violations)[0])
+        dossier, len(violations), (du_resume or autres or violations)[0])
     manifeste = "python3 tests/reference_jeu.py manifeste --dossier %s" % dossier
+    if du_resume:
+        return tete + (
+            "Le résumé des positions répétées (%s, couche R) ou son bloc au manifeste est en cause : ni --generer ni la "
+            "commande `manifeste` ne doivent l'entériner (refaire les empreintes validerait un résumé retouché). Le "
+            "restaurer depuis git avec le manifeste ; ou bien, session principale, après visa : 1) supprimer %s et le bloc "
+            "« repetee » du manifeste ; 2) %s ; 3) python3 tests/reference_couche_r.py resumer <relevés> --vers %s ; "
+            "puis relancer --generer.%s"
+            % (reference_jeu.REPETEE, dossier / reference_jeu.REPETEE, manifeste, dossier,
+               "" if len(du_resume) == len(violations) else " Les %d autre(s) violation(s) se traitent ensuite."
+               % (len(violations) - len(du_resume))))
     if not autres:
         return tete + (
             "--generer ne change pas les tables (ADR 0006) : une table ou l'historique ne correspond plus au manifeste. "

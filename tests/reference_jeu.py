@@ -22,6 +22,8 @@ Format (ADR 0006, décision 2), un dossier :
     historique.json         {"phases": [{"name": "S1901M", "orders": {"AUSTRIA": [ordres]}}]}
     tables/<PHASE>.json     {"phase": "S1901M", "tables": {"AUSTRIA": <table>}}
     attendus/<PHASE>.json   {"phase": "S1901M", "attendus": {"AUSTRIA": {"D2": ...}}}
+    repetee.json            facultatif : résumé des positions répétées (couche R), {"planchers": {...},
+                            "positions": {"S1901M": {"AUSTRIA": <résumé>}}}
 
 <table> : les quatre clés que plan_export écrit et que le bot de dialogue lit,
 `plans` (rank, orders, value, cost_vs_best), `order_values`, `candidates` (orders,
@@ -31,6 +33,13 @@ prob, score, et `orders` quand ce ne sont pas ceux du candidat de même rang),
 `prior_policy` (prob, et `action` -- le rang de l'action dans `action_values` -- ou
 `orders` si elle n'y est pas), `regularize_lambda`, `boost`,
 `max_prob`. Les attendus sont ceux de tests/reference_couche_d.py.
+
+<résumé> (tests/reference_couche_r.py, qui l'écrit et le lit ; ADR 0006, décision 2 : des
+grandeurs résumées et leurs tolérances, jamais les recherches brutes) : `n` tirages ;
+`ln_lambda` et `v_tete` [moyenne, écart type] ; `tetes` [{orders, n}] ; `order_values`
+{ordre: [moyenne, écart type, effectif]} ; `S_ov`, `S_G` ; `boost`, `max_prob`. Le manifeste
+en porte alors le bloc `repetee` : date, SHA du code, commande, et des relevés d'origine
+(hors git) leur nombre, celui des recherches résumées et une empreinte.
 
 Ce qu'un relevé contient en plus n'entre pas : `computed_at`, `gpu`, `duree_s`,
 `journal`, `statut`, `game_id`, texte de message. Le réducteur ne recopie que les
@@ -51,6 +60,7 @@ RACINE = Path(__file__).resolve().parents[1]
 DOSSIER = RACINE / "tests" / "reference"
 EMPLACEMENT = "tests/reference"  # seul dossier admis, relatif à la racine du dépôt
 MANIFESTE, HISTORIQUE, TABLES, ATTENDUS = "manifeste.json", "historique.json", "tables", "attendus"
+REPETEE = "repetee.json"  # résumé des positions répétées (couche R) : facultatif, avec son bloc au manifeste
 FORMAT = 1
 NATURE = "100 % bots"
 PLAFOND_OCTETS = 512 * 1024  # ADR 0006, décision 3 : le dépasser demande une annotation de l'ADR
@@ -133,11 +143,18 @@ CLES_ATTENDUS = frozenset((
     "by_recipient", "own_promises", "fichier",
     "recus", "propres", "resolue", "kept", "broken", "exemples", "lignes",
 )) | VOCABULAIRE | BALISES
+# Clés du résumé des positions répétées (liste blanche : l'étendre, c'est étendre le format).
+CLES_REPETEE = ("planchers", "positions")
+CLES_PLANCHERS = ("ln_lambda", "v_tete", "S_ov", "S_G")
+CLES_RESUME = ("n", "ln_lambda", "v_tete", "tetes", "order_values", "S_ov", "S_G", "boost", "max_prob")
+CLES_TETE = ("orders", "n")
 CLES_MANIFESTE = {
     "": ("format", "partie", "phases", "puissances", "capture", "taille_octets", "fichiers"),
     "partie": ("numero", "creee_le", "nature"),
     "capture": ("date", "sha_code", "image", "commande"),
     "attendus": ("date", "sha_code", "commande"),
+    "repetee": ("date", "sha_code", "commande", "releves"),
+    "releves": ("fichiers", "recherches", "sha256"),
     "fichiers": ("chemin", "octets", "sha256"),
 }
 
@@ -266,6 +283,14 @@ def lire_jeu(dossier):
             contenu = charger_json((dossier / nom / (phase + ".json")).read_text(encoding="utf-8"))[cle]
             jeu[cle][phase] = {p: contenu[p] for p in POWERS if p in contenu}
     return jeu
+
+
+def lire_repetee(dossier):
+    """Le résumé des positions répétées du jeu (couche R), ou None s'il n'y est pas. Ne contrôle rien : voir controler()."""
+    fichier = Path(dossier) / REPETEE
+    if fichier.is_symlink() or not fichier.is_file():
+        return None
+    return charger_json(fichier.read_text(encoding="utf-8"))
 
 
 def ecrire_manifeste(dossier, manifeste):
@@ -584,6 +609,62 @@ def _controler_attendus(c, valeur, chemin):
         c.nombre(valeur, chemin)
 
 
+def _controler_repetee(c, donnees):
+    """Le résumé des positions répétées : clés nommées, nombres, ordres ; rend ses positions [(phase, puissance)]."""
+    positions = []
+    if not c.objet(donnees, "", CLES_REPETEE):
+        return positions
+    if c.objet(donnees["planchers"], "planchers", CLES_PLANCHERS):
+        for cle in CLES_PLANCHERS:
+            c.nombre(donnees["planchers"][cle], "planchers." + cle)
+    if not isinstance(donnees["positions"], dict):
+        c.ko("positions", "objet attendu")
+        return positions
+    for phase, par_puissance in donnees["positions"].items():
+        c.chaine(phase, "positions (clé)", (_est_phase,))
+        if not isinstance(par_puissance, dict):
+            c.ko("positions.%s" % phase[:LONGUEUR_ORDRE_MAX], "objet attendu")
+            continue
+        for puissance, resume in par_puissance.items():
+            ici = "positions.%s.%s" % (phase[:LONGUEUR_ORDRE_MAX], puissance[:12])
+            c.chaine(puissance, "positions.%s (clé)" % phase[:LONGUEUR_ORDRE_MAX], (_est_puissance,))
+            positions.append((phase, puissance))
+            if not c.objet(resume, ici, CLES_RESUME):
+                continue
+            if not _entier(resume["n"]) or resume["n"] < 2:
+                c.ko(ici + ".n", "nombre de tirages (entier, au moins 2) attendu")
+            for cle in ("ln_lambda", "v_tete"):
+                paire = resume[cle]
+                if not isinstance(paire, list) or len(paire) != 2:
+                    c.ko("%s.%s" % (ici, cle), "[moyenne, écart type] attendu")
+                    continue
+                for i, valeur in enumerate(paire):
+                    c.nombre(valeur, "%s.%s[%d]" % (ici, cle, i))
+            for cle in ("S_ov", "S_G", "boost", "max_prob"):
+                c.nombre(resume[cle], "%s.%s" % (ici, cle))
+            tetes = c.liste(resume["tetes"], ici + ".tetes")
+            if not tetes:
+                c.ko(ici + ".tetes", "au moins une tête attendue")
+            for i, tete in tetes:
+                la = "%s.tetes[%d]" % (ici, i)
+                if c.objet(tete, la, CLES_TETE):
+                    c.ordres(tete["orders"], la + ".orders")
+                    c.entier(tete["n"], la + ".n")
+            if not isinstance(resume["order_values"], dict):
+                c.ko(ici + ".order_values", "objet attendu")
+                continue
+            for ordre, triplet in resume["order_values"].items():
+                la = "%s.order_values.%s" % (ici, ordre[:LONGUEUR_ORDRE_MAX])
+                c.chaine(ordre, ici + ".order_values (clé)", (_est_ordre,))
+                if not isinstance(triplet, list) or len(triplet) != 3:
+                    c.ko(la, "[moyenne, écart type, effectif] attendu")
+                    continue
+                c.nombre(triplet[0], la + "[0]")
+                c.nombre(triplet[1], la + "[1]")
+                c.entier(triplet[2], la + "[2]")
+    return positions
+
+
 def _controler_manifeste(c, manifeste, dossier, presents, tables):
     """Le manifeste : clés nommées, chaque valeur typée, et fidèle au dossier.
 
@@ -592,7 +673,7 @@ def _controler_manifeste(c, manifeste, dossier, presents, tables):
     tables/ (celles d'attendus/ en font partie), ses puissances l'union de celles
     des tables : un manifeste raccourci ne peut pas soustraire une table à la couche D.
     """
-    if not c.objet(manifeste, "", CLES_MANIFESTE[""], ("attendus",)):
+    if not c.objet(manifeste, "", CLES_MANIFESTE[""], ("attendus", "repetee")):
         return
     if manifeste["format"] != FORMAT or isinstance(manifeste["format"], bool):
         c.ko("format", "%d attendu" % FORMAT)
@@ -602,11 +683,18 @@ def _controler_manifeste(c, manifeste, dossier, presents, tables):
         c.motif(partie["creee_le"], "partie.creee_le", DATE, "date AAAA-MM-JJ")
         if partie["nature"] != NATURE:
             c.ko("partie.nature", "%r attendu : seule une partie 100 %% bots est admise" % NATURE)
-    for cle, bloc in (("capture", capture), ("attendus", manifeste.get("attendus"))):
-        if cle == "attendus" and "attendus" not in manifeste:
+    if ("repetee" in manifeste) != (REPETEE in presents):  # le résumé et son bloc vont ensemble
+        c.ko("repetee", "bloc sans %s dans le dossier" % REPETEE if "repetee" in manifeste
+             else "%s est dans le dossier sans son bloc (date, SHA, commande, relevés d'origine)" % REPETEE)
+    for cle, bloc in (("capture", capture), ("attendus", manifeste.get("attendus")), ("repetee", manifeste.get("repetee"))):
+        if cle != "capture" and cle not in manifeste:
             continue
         if not c.objet(bloc, cle, CLES_MANIFESTE[cle]):
             continue
+        if cle == "repetee" and c.objet(bloc["releves"], "repetee.releves", CLES_MANIFESTE["releves"]):
+            c.entier(bloc["releves"]["fichiers"], "repetee.releves.fichiers")
+            c.entier(bloc["releves"]["recherches"], "repetee.releves.recherches")
+            c.motif(bloc["releves"]["sha256"], "repetee.releves.sha256", SHA256, "SHA-256")
         c.motif(bloc["date"], cle + ".date", DATE, "date AAAA-MM-JJ")
         c.motif(bloc["sha_code"], cle + ".sha_code", SHA, "SHA complet (40 chiffres hexadécimaux)")
         if "image" in CLES_MANIFESTE[cle]:
@@ -671,7 +759,7 @@ def controler(dossier=DOSSIER):
     ]
     if not presents:
         return violations
-    tables, manifeste = {}, None
+    tables, manifeste, repetees = {}, None, None
     taille = sum((dossier / f).stat().st_size for f in presents)
     if taille > PLAFOND_OCTETS:
         violations.append("%s : %d octets, plafond %d (512 Kio ; ADR 0006, décision 3)" % (dossier.name, taille, PLAFOND_OCTETS))
@@ -679,12 +767,12 @@ def controler(dossier=DOSSIER):
         c = _Controle(relatif)
         parties = relatif.split("/")
         phase = parties[-1][:-len(".json")] if relatif.endswith(".json") else ""
-        connu = relatif in (MANIFESTE, HISTORIQUE) or (
+        connu = relatif in (MANIFESTE, HISTORIQUE, REPETEE) or (
             len(parties) == 2 and parties[0] in (TABLES, ATTENDUS) and est_phase(phase)
         )
         if not connu:
             c.ko("", "fichier qui n'est pas du format du jeu d'essai (manifeste.json, historique.json, "
-                     "tables/<PHASE>.json, attendus/<PHASE>.json)")
+                     "tables/<PHASE>.json, attendus/<PHASE>.json, repetee.json)")
             violations.extend(c.violations)
             continue
         try:
@@ -698,6 +786,8 @@ def controler(dossier=DOSSIER):
                 manifeste = (c, donnees)  # jugé en dernier : il se compare aux tables lues
             elif relatif == HISTORIQUE:
                 _controler_historique(c, donnees)
+            elif relatif == REPETEE:
+                repetees = _controler_repetee(c, donnees)  # ses positions se comparent plus bas aux tables lues
             elif parties[0] == TABLES:
                 _controler_par_puissance(c, donnees, "tables", phase, _controler_table)
                 if isinstance(donnees, dict) and isinstance(donnees.get("tables"), dict):
@@ -707,6 +797,13 @@ def controler(dossier=DOSSIER):
         except (RecursionError, TypeError, AttributeError, KeyError, IndexError, OverflowError) as e:
             # Une forme que le contrôle n'a pas prévue est une violation, jamais une trace.
             c.ko("", "forme inattendue (%s)" % type(e).__name__)
+        violations.extend(c.violations)
+    if repetees is not None:
+        c = _Controle(REPETEE)
+        for phase, puissance in repetees:
+            if puissance not in tables.get(phase, ()):
+                c.ko("positions.%s.%s" % (phase[:LONGUEUR_ORDRE_MAX], puissance[:12]),
+                     "résumé d'une position sans table dans %s/" % TABLES)
         violations.extend(c.violations)
     if manifeste is not None:
         c, donnees = manifeste
