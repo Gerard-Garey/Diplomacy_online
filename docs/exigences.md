@@ -48,7 +48,7 @@ Ce document fixe ce que le projet doit faire ; `CLAUDE.md` renvoie ici pour le f
 
 4.2. **Clef en main** : `git clone`, `./install.sh`, `./demarrer.sh`, sur Ubuntu avec GPU NVIDIA d'au moins 8 Go, Docker et `nvidia-container-toolkit`. L'image Cicero se construit depuis les sources, sans rien reprendre d'une autre machine.
 
-4.3. Aucune donnée locale dans le dépôt : ni jeton, ni base de données, ni comptes, ni état de partie, ni chemin personnel. La base se crée vide au premier démarrage.
+4.3. Aucune donnée locale dans le dépôt : ni jeton, ni base de données, ni comptes, ni chemin personnel, ni état d'exécution d'une instance (journaux, fichiers d'état des conteneurs, messages, parties). Seule exception, écrite dans l'ADR 0006 : un jeu d'essai figé, tiré d'une partie 100 % bots et réduit à l'historique des ordres et aux tables du moteur, versionné dans le seul dossier `tests/reference/` avec son manifeste, et contrôlé par `tests/verifier.sh` (clés en liste blanche, aucun texte de message, plafond de taille). La base se crée vide au premier démarrage.
 
 4.4. `install.sh` est relançable et s'arrête, sur un prérequis manquant, avec un message qui dit quoi faire.
 
