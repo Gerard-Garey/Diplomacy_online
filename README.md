@@ -62,9 +62,9 @@ docker exec -e XDEBUG_MODE=off webdiplomacy-php-fpm-1 \
   php /application/gamecreateBotsOnly.php <nom>
 ```
 
-- `<nom>` : 1 à 50 caractères parmi `A-Z a-z 0-9 _ . -`, le premier alphanumérique ; un nom déjà pris est refusé, ainsi que tout nom commençant par « SB » (`SB_x`, `SBtest`, `Sbires`), que webDiplomacy prendrait pour un bac à sable et ne résoudrait jamais ;
+- `<nom>` : 1 à 50 caractères parmi `A-Z a-z 0-9 _ . -`, le premier alphanumérique ; un nom déjà pris est refusé, ainsi que tout nom commençant par « SB » suivi d'au moins un caractère (`SB_x`, `SBtest`, `Sbires`), que webDiplomacy prendrait pour un bac à sable et dont il repousserait l'échéance à 2033 ;
 - codes de sortie : 0, avec `gameID=<n>` en dernière ligne ; 2, mauvais usage (rien n'est lu en base) ; 1, échec (rien n'est créé) ;
-- le script ne répond qu'en ligne de commande (403 par le site) ; les bots ne s'y parlent pas entre eux ; rien n'arrête la partie d'elle-même avant sa fin, elle se met en pause par SQL. Détail : `docs/doc/architecture.md` § 5.
+- le script ne répond qu'en ligne de commande (403 par le site) ; les bots ne s'y parlent pas tant qu'aucun message n'y est posté : aucun code ne l'empêche (#14), et un seul message injecté au nom d'une puissance ouvre un échange entre deux bots, jusqu'à dix réponses par côté, par paire et par phase, chaque réponse appelant Claude ; rien n'arrête la partie d'elle-même avant sa fin, le mainteneur l'arrête par une pause posée en base. Détail : `docs/doc/architecture.md` § 5.
 
 `./install.sh` est relançable : une étape déjà faite est sautée. Options : `--sans-build`, `--sans-modeles`.
 
