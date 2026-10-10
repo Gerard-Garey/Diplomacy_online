@@ -9,6 +9,7 @@ Ce dépôt ne contient **que ce que le projet ajoute** aux deux logiciels d'amon
 | Élément | État |
 |---|---|
 | Fonctionnement de l'ensemble (ordres, dialogue, promesses) | Éprouvé sur des parties réelles, sur la machine d'origine |
+| Logique des promesses révisée (trahison déclarée, renfort gradué, journal d'envoi) | Mesurée sur bancs et positions rejouées : tests sans pile (`bash tests/verifier.sh`) ; le 2026-10-03, 30 recherches réelles du moteur et un essai d'envoi réel ; le 2026-10-10, 160 appels à Claude sur une seule position. Aucune partie jouée contre un humain n'entre dans ces mesures. Détail et limites : `docs/doc/architecture.md` § 4 |
 | `install.sh` jusqu'à la préparation des amonts (clonage, patchs, configuration, dépendances PHP) | Vérifié par un essai à blanc |
 | Construction de l'image Cicero par le `Dockerfile` de ce dépôt | Validée le 2026-10-03 sur la machine d'origine : build complet depuis les sources en 20 min environ, image de 16,7 Go ; PyTorch y voit le GPU, `pydipcc`, `postman` et les protos s'importent |
 | Démarrage de la pile depuis ce dépôt, sur une base vide | Validé le 2026-10-03 : inscription d'un joueur, partie créée contre six bots, ordres soumis par les six, réponse de Claude à un message, données conservées après `arreter.sh` puis `demarrer.sh` |
@@ -70,6 +71,7 @@ Les bots soumettent leurs ordres en quelques minutes, et le bot de dialogue rel�
 | `cicero/overlay/` | Fichiers nouveaux copiés dans l'arbre Cicero : `Dockerfile`, bot de dialogue, configuration de l'agent, export du plan, engagements |
 | `webdiplomacy/patches/`, `webdiplomacy/overlay/` | Idem pour webDiplomacy |
 | `install.sh`, `demarrer.sh`, `arreter.sh` | Installation et exploitation |
+| `tests/` | Batterie statique (`verifier.sh`), banc déterministe de la logique des promesses et de l'état du bot de dialogue, sortie mesurée du banc (`mesure_promesses.py`), scripts des mesures faites sur la pile (`mesure/`) |
 | `outils/exporter_patchs.sh` | Reporte dans le dépôt le travail fait dans `amont/` |
 | `docs/doc/architecture.md` | Fonctionnement d'ensemble ; **à lire en premier** |
 | `docs/exigences.md`, `docs/adr/`, `docs/feuille-de-route.md` | Cahier des charges, décisions, plan |

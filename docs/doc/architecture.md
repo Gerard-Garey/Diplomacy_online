@@ -54,13 +54,24 @@ Un appel à Claude en échec (réseau, quota) n'est pas pris pour un silence : `
 
 Le vrai Cicero procède dans l'ordre *plan → intentions → messages* : ses messages sont écrits à partir de ce qu'il compte jouer. Le projet reprend ce sens de circulation :
 
-1. **Export du plan.** À chaque calcul, `cicero-orders` écrit dans `current_plans.json` son action préférée et les suivantes, chacune avec son **coût** (valeur perdue par rapport à la meilleure) — `fairdiplomacy/utils/plan_export.py`. À côté de ces plans (six au plus, `TOP_K`), le fichier porte un index `order_values` : pour chaque ordre présent dans au moins une action candidate de la recherche, et pas seulement dans les six plans exportés, la **valeur de cet ordre**, c'est-à-dire la valeur de l'action de meilleur score qui le contient — ce que le moteur jouerait s'il était tenu à cet ordre (`export_plans`, `plan_export.py:106-111`). Ce n'est pas la meilleure valeur brute de l'ordre, qui peut venir d'une action que le moteur ne jouerait pas.
-2. **Dialogue informé.** Le bot de dialogue place ce plan dans la consigne de Claude. Les alternatives sont l'essentiel : elles disent quelles concessions sont presque gratuites, donc ce qu'une négociation peut réellement faire changer.
-3. **Parcimonie.** La consigne interdit de livrer le plan en bloc, d'énumérer ses unités ou de rapporter les propos d'une autre puissance. Le bluff reste permis.
+1. **Export du plan.** À chaque calcul, `cicero-orders` écrit dans `current_plans.json` son action préférée et les suivantes (six plans au plus, `TOP_K`), chacune avec son **coût** : la valeur perdue par rapport à l'action préférée — `export_plans`, `fairdiplomacy/utils/plan_export.py:46`. Les plans sont classés par score (§ 2) et non par valeur : l'action préférée n'est pas toujours la mieux valorisée, et un coût peut être nul ou négatif (il est négatif pour 47 des 150 plans alternatifs exportés par les 30 recherches réelles du 2026-10-03, § 4). Trois clés accompagnent les plans :
+   - `order_values` : pour chaque ordre présent dans au moins une action candidate de la recherche, et pas seulement dans les six plans exportés, la **valeur de cet ordre**, c'est-à-dire la valeur de l'action de meilleur score qui le contient — ce que le moteur jouerait s'il était tenu à cet ordre (`plan_export.py:106-111`). Ce n'est pas la meilleure valeur brute de l'ordre, qui peut venir d'une action que le moteur ne jouerait pas ;
+   - `candidates` : toutes les actions candidates de la recherche, dans l'ordre du classement, chacune avec sa valeur et sa probabilité **avant** renfort (§ 4) ;
+   - `search` : les paramètres de cette recherche — `lambda`, le λ réellement appliqué, qui n'est pas le réglage de 1e-2 mais ce réglage mis à l'échelle par le moteur à chaque recherche (`bqre1p_agent.py:1207-1211` ; de 0,0025 à 0,024 sur les mêmes 30 recherches) ; `boost`, le multiplicateur de renfort (1,0 si le mécanisme des engagements est désactivé dans la configuration, `exported_boost`, `plan_export.py:36`) ; `max_prob`, le plafond.
+
+   `candidates` et `search` sont écrites ensemble ou pas du tout : s'il manque une probabilité ou un paramètre, aucune des deux ne l'est, et le bot de dialogue tient le classement pour inconnu (`_search_table`, `plan_export.py:152`). Le fichier grossit ainsi de toutes les actions candidates (35 au plus par puissance) à chaque export ; rien ne le purge à ce jour.
+2. **Dialogue informé.** Le bot de dialogue place ce plan dans la consigne de Claude. Les alternatives sont l'essentiel : elles disent quelles concessions sont presque gratuites, donc ce qu'une négociation peut réellement faire changer. Un coût nul ou négatif (au plus 0,0005, `FREE_COST`) est affiché « free », sans signe ; c'est un affichage, l'export garde le chiffre (`_shown_cost`, `claude_dialogue_bot.py:168`). La consigne comporte, dans cet ordre et quand elles ont un contenu, quatre sections propres à la situation :
+   - le plan : action préférée et alternatives avec leur coût (`build_plan_section`, `:128`) ;
+   - « Promises you have already made this phase » : ce que le bot a déjà sincèrement promis dans la phase, à qui, et ce que coûte chaque promesse tenue, avec la règle de la trahison déclarée (`build_commitments_section`, `:399` ; § 4) ;
+   - « Your own record with X » : le bilan des promesses que le bot a lui-même faites à l'interlocuteur courant, et à lui seul (`build_own_record_section`, `:466` ; § 4) ;
+   - « Track record of X with you » : le bilan des promesses de l'interlocuteur (`build_trust_section`, `:493` ; registre de confiance, § 4).
+3. **Parcimonie.** La consigne interdit de livrer le plan en bloc, d'énumérer ses unités, de rapporter les propos d'une autre puissance, et de révéler ce qui a été promis à une autre puissance ou qu'une promesse faite à une autre est rompue (`SYSTEM_PROMPT_TEMPLATE`, `claude_dialogue_bot.py:1043-1048`). Le bluff reste permis.
 
 ## 4. Les promesses
 
-Chaque réponse de Claude est un objet JSON à deux champs : `reply`, le message envoyé, et `sincere`, **jamais transmis au joueur**, qui liste les ordres que le bot vient de s'engager à jouer et compte réellement jouer. Un bluff figure dans `reply` et pas dans `sincere`.
+Chaque réponse de Claude est un objet JSON à trois champs : `reply`, le message envoyé ; `sincere`, **jamais transmis au joueur**, qui liste les ordres que le bot vient de s'engager à jouer et compte réellement jouer ; `betray`, privé lui aussi et presque toujours vide, qui liste les promesses déjà faites dans la phase que le bot **déclare rompre** (`SYSTEM_PROMPT_TEMPLATE`, `claude_dialogue_bot.py:1052-1062`). Un bluff figure dans `reply` et pas dans `sincere`. Un champ `betray` absent ou mal formé vaut liste vide : une liste à moitié lue ne doit rompre aucune promesse (`generate_reply`, `:1167-1170`).
+
+`betray` **ne quitte jamais le bot de dialogue** : il n'est écrit dans aucun fichier lu par le moteur. Ce qui atteint le moteur reste la liste d'ordres de `pseudo_commitments.json`, issue de `sincere` ; `betray` ne fait que décider lesquels de ces ordres sont retenus.
 
 Les ordres sincères suivent ce chemin :
 
@@ -69,7 +80,7 @@ Les ordres sincères suivent ce chemin :
 | Normalisation | `normalize_order_spacing` (`fairdiplomacy/utils/orders.py`) | `F TRI-ALB` devient `F TRI - ALB` |
 | Filtre de légalité | `legal_commitments` (`fairdiplomacy/utils/pseudo_commitments.py`) | Un ordre impossible pour cette puissance n'est jamais retenu |
 | Cohérence dans un message | `_reject_contradictions` (`claude_dialogue_bot.py:333`) | Deux ordres distincts pour une même unité dans la liste `sincere` d'un même message : aucun des deux n'est retenu, et la promesse déjà faite pour cette unité, s'il y en a une, reste telle quelle (ligne de journal `[double-deal]`). Le même ordre écrit deux fois compte une fois |
-| Cohérence entre interlocuteurs | `_reject_contradictions` (`claude_dialogue_bot.py`) | Deux promesses contraires sur une même unité : la première tient, sauf si la seconde vaut nettement plus — gain de valeur strictement supérieur à la marge `COMMITMENT_SWITCH_MARGIN`, les deux valeurs étant lues dans l'index `order_values` (§ 3) ; l'autre devient un bluff. **Si la valeur de l'une des deux est inconnue, la première tient** : rien n'établit alors que l'échange vaille une parole rompue (`_order_value`, `claude_dialogue_bot.py:203` et `:349`). Une promesse abandonnée est retirée chez toutes les puissances qui la détenaient, et non chez une seule |
+| Cohérence entre interlocuteurs | `_reject_contradictions` (`claude_dialogue_bot.py:220`) | Deux promesses contraires sur une même unité : la première tient, et la seconde est un bluff, sauf **trahison déclarée** — trois conditions cumulatives, détaillées ci-dessous. Une promesse remplacée est retirée chez toutes les puissances qui la détenaient, et non chez une seule |
 | Injection | `build_extra_plausible_actions`, appelée depuis `get_orders` | L'action promise est ajoutée aux candidats par le mécanisme d'amont `extra_plausible_orders` : elle ne peut pas être évincée et reçoit une probabilité calculée par le modèle |
 | Renfort | `boosted_policy`, appelée par `apply_commitments_to_policy` (`fairdiplomacy/utils/pseudo_commitments.py:204` et `:344`) | La probabilité de chaque action candidate est multipliée selon la **part des ordres promis qu'elle contient**, sous plafond (formule ci-dessous) |
 
@@ -92,13 +103,60 @@ Trois conséquences à connaître :
 
 Côté moteur, un fichier d'engagements absent, illisible ou de forme inattendue ne fait jamais échouer le calcul des ordres : `load_commitments` (`pseudo_commitments.py:50`) rend alors « aucun engagement », avec un avertissement dans le journal du moteur, et une puissance dont l'entrée n'est pas une liste d'ordres est ignorée sans que les autres le soient.
 
+**Trahison déclarée.** Une promesse déjà faite dans la phase (notée E) n'est remplacée par un ordre contraire pour la même unité (noté N) que si trois conditions sont réunies ; sinon E tient et N est un bluff — le message part tel quel, le moteur ne voit pas N.
+
+1. **Déclaration.** Claude a inscrit E dans `betray`, à l'identique de ce que la consigne lui affiche (les espaces autour du tiret sont normalisés avant comparaison). Sans cette déclaration, un ordre contraire est tenu pour une inattention du modèle, pas pour une décision.
+2. **Gain.** La valeur de N dépasse celle de E de plus de 0,05 (`COMMITMENT_SWITCH_MARGIN`, `claude_dialogue_bot.py:42`). Les deux valeurs sont lues dans `order_values` (§ 3) : on compare ce que le moteur jouerait tenu à N et ce qu'il jouerait tenu à E. La différence est arrondie à cinq décimales, précision de l'export, et l'inégalité est stricte. La marge se compare en valeur, jamais en score.
+3. **Condition (e) : le moteur jouerait N.** Une fois E échangé contre N, une action contenant N doit prendre la tête du classement du moteur après renfort.
+
+Pourquoi trois conditions. La première sépare une décision d'une hallucination : avant elle, la règle de valeur s'appliquait seule, et un ordre contraire écrit par inadvertance retirait la promesse dès que le gain passait la marge. La deuxième donne un coût à la parole rompue et protège du bruit des valeurs, qui sont des estimations par simulation ; 0,05 est l'ordre de grandeur de l'étendue des valeurs d'une table (étendue médiane de 0,051 sur les 30 recherches réelles du 2026-10-03). La troisième évite de rompre deux promesses pour une : sans elle, le moteur peut ne jouer ni E, qu'on vient de retirer, ni N, qu'il ne retient pas. L'ADR 0004 rapporte à ce sujet une mesure d'`expert-cicero` sur 55 tables relevées dans les journaux de deux parties — sur la seule marge, près de 45 % des remplacements acceptés auraient été dans ce cas ; les couples (E, N) y étaient toutes les paires d'ordres d'une même unité, non des promesses observées, et la mesure n'a pas été refaite pour ce document.
+
+*Calcul de la condition (e).* Il se fait dans le bot de dialogue, sur les clés `candidates` et `search` de `current_plans.json` (`engine_head_action` et `rescored_candidates`, `fairdiplomacy/utils/pseudo_commitments.py:323` et `:263`). Avec S' l'ensemble des engagements de la puissance tels que le message les laisserait (un ordre par unité, tous interlocuteurs confondus), v(a) la valeur de l'action a et λ, k, plafond les paramètres de `search` :
+
+```
+q(a)  = renfort gradué de p(a) pour les promesses S'      (formule ci-dessus, même fonction que le moteur)
+s'(a) = v(a) + λ · ln( max(q(a), 1e-6) )
+(e) est vraie si N appartient à l'action de s' maximal    (la première du classement en cas d'égalité)
+```
+
+Le plancher de 1e-6 est celui du moteur (`br_corr_bilateral_search.py:339`). Le renfort est calculé par `boosted_policy`, la fonction même que le moteur applique : deux copies de la formule feraient diverger la condition du comportement réel. Si la table est absente ou illisible (entrée écrite par une version antérieure, valeur ou probabilité non finie, action en double), le classement est inconnu et tout remplacement est refusé ; la consigne l'annonce alors à Claude, promesse par promesse (« cannot be replaced this phase »).
+
+*Portée de ce calcul.* Il est **exact sur la table exportée** : sur les 30 recherches réelles du 2026-10-03, l'action de tête recalculée par le bot de dialogue était l'action exportée et l'action rendue par le moteur, 30 fois sur 30. Il est **prudent quant à l'ensemble des candidats** : la recherche suivante y ajoutera l'action injectée, que la table ne contient pas encore, et un N qu'aucun candidat ne contient est refusé. Il **ne dit rien de la réestimation des valeurs** d'une recherche à l'autre : l'hypothèse est qu'elles bougent peu, et ce bruit n'est pas mesuré. Pour que les probabilités exportées soient bien celles d'avant renfort, le patch du moteur copie la politique avant de la renforcer, passe cette copie à l'export et la remet dans le résultat de recherche (`bqre1p_agent.py:1082` et `:1242`) : sans cela, une recherche incrémentale — celle qui repart du résultat précédent — renforcerait une politique déjà renforcée. Contrôle du 2026-10-03 : probabilités exportées égales d'une recherche à la suivante sur les 4 transitions incrémentales observées (deux puissances, une phase).
+
+*Table de décision*, appliquée unité par unité, après le filtre de légalité. Chaque ligne est un test de `tests/test_promesses.py` ; `python3 tests/mesure_promesses.py` en imprime le résultat (lignes « L0 » à « L8 »).
+
+| Ligne | Cas | Sort de N | Journal |
+|---|---|---|---|
+| 0 | `reply` nul ou vide ; ou message finalement non parti (sourdine, abandon) | rien n'est retenu, ni `sincere` ni `betray` ; les promesses restent ou reviennent à ce qu'elles étaient | — (`[send-muted]`, `[send-failed]`) |
+| 1 | plusieurs ordres distincts pour l'unité dans `sincere` | aucun retenu ; E tient ; un label sur E est ignoré (`conflicting`) | `[double-deal]`, et `[betrayal-ignored]` s'il y a un label |
+| 2 | aucune promesse antérieure pour l'unité | accepté | — |
+| 3 | N = E (redite) | accepté, à ce destinataire aussi ; un label sur E est ignoré (`restated`) | `[betrayal-ignored]` s'il y a un label |
+| 4 | N ≠ E, sans label | bluff (`undeclared`) | `[double-deal]` |
+| 5 | label ; valeur de N ou de E inconnue, table du moteur absente ou illisible, ou N absent de tout candidat | bluff (`unknown_value`) | `[betrayal-refused]` |
+| 6 | label ; gain ≤ 0,05 | bluff (`below_margin`) | `[betrayal-refused]`, avec le gain |
+| 6 bis | label ; gain > 0,05 ; condition (e) fausse | bluff (`not_played`) | `[betrayal-refused]`, avec le gain |
+| 7 | label ; gain > 0,05 ; condition (e) vraie | accepté ; E retiré chez toutes les puissances qui le détenaient | `[betrayal]` par puissance trahie, `[revision]` si E avait été promis au destinataire du message |
+| 8 | label sans ordre de remplacement pour l'unité (`no_replacement`), ou qui ne reproduit aucune promesse de la phase (`no_such_promise`) | le label est ignoré ; la promesse tient | `[betrayal-ignored]` |
+
+Retirer une promesse sans la remplacer n'est donc pas possible (ligne 8). Un N illégal est écarté par le filtre de légalité avant la table (`[filtered]`) : son label reste sans remplacement.
+
+*Plusieurs trahisons dans un même message* sont **rejugées jusqu'à stabilité** (`claude_dialogue_bot.py:359-382`). Les remplacements qui ont passé la déclaration et le gain sont projetés ensemble dans S', et l'action de tête est calculée ; tout N qui n'y figure pas est refusé (`not_played`), son E est remis dans S', et les N restants sont rejugés sur ce nouvel ensemble, jusqu'à ce qu'aucun ne soit plus retiré. Chaque tour retire au moins un N, ce qui borne le nombre de tours. Propriété obtenue : tout remplacement accepté appartient à l'action de tête calculée sur les engagements finalement enregistrés (0 exception sur 1 517 remplacements acceptés, 3 000 tables engendrées à graine fixe : `python3 tests/mesure_promesses.py`, lignes « P »). Limite assumée : l'itération ne fait que retirer. Un N refusé à un tour n'est pas rejugé ensuite, alors qu'il aurait parfois été accepté ; le refus pèche par excès, du côté prudent, puisqu'il laisse en place la promesse antérieure (ordre de grandeur rapporté par l'ADR 0004, décision 12, mesure d'`audit` non refaite ici : 42 refus sur 16 533).
+
+*Lignes de journal.* Les refus (`[double-deal]`, `[betrayal-refused]`, `[betrayal-ignored]`) ne changent aucun engagement et sont écrits au moment du jugement. Les lignes qui annoncent un changement ne sortent qu'à la confirmation de l'envoi, au plus une fois (journal d'envoi, plus bas) :
+
+- `[betrayal] <P> drops <E> promised to <X> in favour of <N> for <Y> (value gain …)` : une ligne par puissance X trahie, Y étant le destinataire du message ;
+- `[revision] <P> replaces <E> promised to <X> with <N> in the same conversation (value gain …)` : **révision**. E avait été promis au destinataire même du message ; le remplacement suit la même règle (déclaration, gain, condition (e)) mais ne compte pas comme promesse rompue envers lui ;
+- `[revision] <P> now promises <N> to <X>: <E>, promised to them earlier this phase and dropped since, no longer counts as a promise to them` : **révision séquentielle**. E, promis à X, a d'abord été trahi dans un message à un tiers ; le bot promet ensuite sincèrement N à X avant la résolution : l'ancienne promesse sort du bilan envers X (`claude_dialogue_bot.py:1584-1606`).
+
+Une promesse trahie sans que la puissance trahie reçoive le nouvel ordre reste, elle, comptée envers cette puissance : ce qui fera foi est l'ordre joué (« Promesses du bot », plus bas).
+
 Ces règles maintiennent un invariant : **au plus un engagement sincère par unité**, tous interlocuteurs confondus (`_reject_contradictions`, `claude_dialogue_bot.py:255`). Le moteur le contrôle une seconde fois à la lecture du fichier : si `pseudo_commitments.json` portait malgré tout deux ordres distincts pour une unité, `resolve_commitment_conflicts` (`fairdiplomacy/utils/pseudo_commitments.py:133`) les écarterait tous les deux et s'en remettrait au plan pour cette unité.
 
 L'action promise est ensuite **évaluée comme les autres** : si sa valeur est nettement inférieure, elle n'est pas jouée. Une promesse ne peut donc pas faire jouer un bot contre son intérêt ; en contrepartie, elle n'est pas garantie.
 
 **Journal d'envoi.** Un engagement n'a de sens que si le message qui le porte est parti. Or le site n'offre aucune clé d'idempotence, et une requête d'envoi peut paraître en échec alors que son message a été stocké. Le bot de dialogue ne renvoie donc jamais une réponse sur la foi d'une erreur : il écrit d'abord ce qu'il s'apprête à envoyer, puis tranche une issue douteuse en relisant les messages de la partie (`process_bot`, `claude_dialogue_bot.py:1225-1253`). L'ordre des écritures est fixe :
 
-1. l'état (`claude_dialogue_state.json`) : les promesses de la phase telles que la réponse les laisse, et une entrée `pending_send` — une par bot et par partie — qui dit ce qui est envoyé (message auquel on répond, destinataire, texte, phase) et de quoi le défaire (ordres ajoutés, promesses retirées avec les puissances qui les détenaient, lignes de journal en attente, nombre d'envois et de relectures) ;
+1. l'état (`claude_dialogue_state.json`) : les promesses de la phase telles que la réponse les laisse (`by_recipient`, et `own_promises` décrit plus bas), et une entrée `pending_send` — une par bot et par partie — qui dit ce qui est envoyé (message auquel on répond, destinataire, texte, phase) et de quoi le défaire (ordres ajoutés, promesses retirées avec les puissances qui les détenaient, lignes de journal en attente, nombre d'envois et de relectures) ;
 2. le fichier d'engagements `pseudo_commitments.json` ;
 3. le compteur d'envois, dans l'état ;
 4. la requête d'envoi.
@@ -128,6 +186,31 @@ Limites connues, au regard de l'exigence « un message n'est jamais envoyé deux
 Mesuré : le banc sans pile (`python3 tests/test_etat_dialogue.py`, 89 tests, où le site est remplacé par la doublure `tests/faux_site.py`) et **un** essai d'envoi réel, le 2026-10-03, sur une partie jetable — un message portant accents, `&`, `<`, saut de ligne et émoji a été classé « confirmé » puis retrouvé exactement une fois par relecture ; le site a stocké l'émoji sous la forme `????`, ce que la clé de comparaison tolère (procédure : `tests/mesure/envoi_reel.md`). Cet essai ne porte ni sur la sourdine, ni sur un envoi réellement incertain, ni sur un stockage tardif : ces cas ne sont éprouvés que contre la doublure. La décision et ses motifs relèvent de l'ADR 0005 (journal d'envoi).
 
 **Registre de confiance.** Les promesses *du joueur* sont extraites de la conversation, filtrées par la même règle de légalité, puis comparées à ses ordres réels une fois la phase résolue. Le bilan (tenues, rompues, exemples) est rappelé à Claude dans les échanges suivants.
+
+**Promesses du bot.** Chaque bot tient aussi le bilan de ses propres promesses sincères (`own_promises`, dans `claude_dialogue_state.json`, par bot et par partie) : `pending`, les promesses non encore jugées, par phase et par destinataire, et `record`, le bilan par destinataire (tenues, rompues, dix derniers exemples de promesses rompues). Elles sont écrites à la même étape que les engagements, sous le journal d'envoi, et défaites avec eux si le message n'est pas parti. Une phase est jugée dès qu'elle figure dans la partie et n'est plus la phase courante ; la comparaison est celle du registre de confiance (`_score_promises`, `claude_dialogue_bot.py:534`), avec une règle propre au bot : une unité laissée sans ordre s'est maintenue, si bien qu'un maintien promis est tenu et tout autre ordre rompu. `pending` porte au plus un ordre par unité et par destinataire, le dernier dit sincèrement. Claude ne reçoit ce bilan que pour l'interlocuteur courant (section « Your own record with X », trois exemples au plus) : ce qui a été promis à une puissance ne doit pas pouvoir filtrer dans la conversation d'une autre.
+
+Limites connues du mécanisme, sans correction à ce jour :
+
+- **Table non réexportée.** Après un remplacement accepté, les messages suivants de la phase sont jugés sur la même table tant que le moteur n'a pas refait une recherche : le jugement ne voit ni l'action injectée ni les valeurs réestimées.
+- **Promesse rompue réaffirmée.** Après une trahison, la section des promesses de la consigne ne montre plus rien de ce qui avait été promis à la puissance trahie, jusqu'à la phase suivante : Claude peut lui réaffirmer la promesse qu'il vient de rompre.
+- **`sincere` plus large que ce qui a été dit.** Observé dans la mesure du 2026-10-10 ci-dessous : Claude a parfois rangé tout son plan préféré dans `sincere`, y compris des ordres qu'il n'avait pas énoncés. Le code ne peut pas le détecter : il ne lit pas le message.
+- **Bruit des valeurs non mesuré.** La marge de 0,05 suppose que les valeurs varient peu d'une recherche à l'autre ; si ce bruit approchait la marge, elle serait à revoir. L'échelle même de la valeur (une part de score entre 0 et 1) est une hypothèse d'`expert-cicero`, non vérifiée contre le code d'amont (ADR 0004).
+
+**Ce qui est mesuré, et ce qui ne l'est pas.** Trois niveaux de preuve, à ne pas confondre, puis ce qui manque :
+
+- *Établi par test, sans la pile* : la table de décision, le renfort, la condition (e) et le journal d'envoi, par appel direct des fonctions et par cycles simulés (`bash tests/verifier.sh` : 172 tests pour les promesses, 89 pour l'état et l'envoi). Le site et Claude y sont des doublures.
+- *Mesuré sur le moteur réel*, le 2026-10-03 : 30 recherches sur des positions rejouées d'une partie 100 % bots (phases S1902M, F1902M, S1903M) — table exportée présente 30 fois sur 30, toutes les actions présentes dans la politique d'avant renfort 30 sur 30, action de tête recalculée égale à l'action exportée et à l'action rendue 30 sur 30 (`tests/mesure/rejeu_moteur.py` ; relevés non versionnés, ils contiennent de l'état de partie).
+- *Mesuré sur Claude*, le 2026-10-10 : 160 appels réels, **une seule position et une seule puissance** (même partie, S1902M, `ITALY` ; interlocuteur `AUSTRIA`, tiers `FRANCE`), 20 tirages par case, ancienne et nouvelle consigne ([relevé complet](https://github.com/Gerard-Garey/Diplomacy_online/pull/20#issuecomment-6095335803) ; script `tests/mesure/claude_avant_apres.py`). Avec la nouvelle consigne :
+  - conflit où la trahison est acceptable (gain 0,062) : 11 tirages sur 20 portent un label, tous exacts ; 9 trahisons sont acceptées, 2 labels viennent sans ordre de remplacement et sont ignorés ; dans les 11 autres tirages la promesse est gardée. Avec l'ancienne consigne, 0 sur 20 inscrivait quoi que ce soit dans `sincere` ;
+  - conflit sous la marge (gain 0,029) : aucun label sur 20, la condition de gain n'a pas eu à refuser ;
+  - révision avec le destinataire : 20 labels exacts et 20 révisions acceptées sur 20 ;
+  - aucun ordre contraire sans label sur 100 réponses ; aucune sortie JSON illisible sur 60 ;
+  - **critère non tenu** : dans la situation sans conflit, 1 tirage sur 20 porte un label — Claude y range tout son plan préféré dans `sincere` et déclare la trahison d'une promesse faite au tiers, que le moteur accepte. Le même sur-remplissage de `sincere`, sans trahison, apparaît 3 fois sur 20 dans la situation où le bilan du bot est rappelé ;
+  - une réponse sur 100 nomme le tiers, comme une menace et sans révéler ni la promesse ni l'ordre promis (détection textuelle, lecture à confirmer par le mainteneur) ;
+  - la consigne système passe d'environ 4 620 à environ 6 100 caractères dans les trois situations comparées.
+
+  Vingt tirages ne distinguent que de gros écarts, et une position ne fonde pas une statistique : ces fréquences décrivent cette position, pas le comportement des bots en général.
+- *Non mesuré* : une autre puissance, une autre phase ; le bruit des valeurs d'une recherche à l'autre ; les paraphrases d'une fuite ; l'effet de ces règles sur une partie jouée contre un humain.
 
 Ce que le mécanisme ne couvre pas : les engagements négatifs (« je n'entre pas en Bohême », « je ne construis pas de flotte ») n'ont pas de traduction en ordres et ne sont ni injectés ni suivis.
 
