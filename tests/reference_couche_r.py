@@ -14,9 +14,15 @@ CI ni dans un workflow, à la main, par la session principale. Deux commandes :
 au manifeste : SESSION PRINCIPALE SEULE, après visa (ADR 0006, décision 6). Il refuse un
 jeu qui ne passe pas son contrôle, un résumé déjà là, des relevés dont le tirage 0 n'est
 pas la table figée du jeu, ou dont une recherche, A ou B, n'a pas le boost et le max_prob
-du tirage 0. `comparer` rend 0 (pas de régression), 1 (régression) ou 2 (non concluant, lot
+du tirage 0 ; et si le jeu, résumé écrit, ne passe plus son contrôle, il retire le résumé et
+remet le manifeste tel qu'il était (code 2, comme ses autres refus : le jeu est inchangé,
+`resumer` se relance ; #40). `comparer` rend 0 (pas de régression), 1 (régression) ou 2 (non concluant, lot
 invalide, relevé ou jeu illisible). --seulement et --sauf choisissent les fichiers de relevés
 par leur nom (un fichier par position : la seconde passe s'écarte par --sauf '*passe2*').
+Un lot se lit par numéro de tirage : chaque ligne de recherche, A ou B, porte un `game_id`
+entier et un `tirage` entier, positif ou nul, écrit une seule fois par type de recherche
+dans sa position, tels que les écrit rejeu_moteur.py ; sinon le lot est refusé (code 2),
+pour `resumer` comme pour `comparer` (#37).
 
 Ce que la couche garantit. La couche D rejoue des fonctions pures sur des tables figées :
 elle ne voit pas un changement de cicero_no_dialogue.prototxt, du patch du moteur, du
@@ -84,7 +90,6 @@ ICI = Path(__file__).resolve().parent
 sys.path.insert(0, str(ICI))
 sys.path.insert(0, str(ICI / "mesure"))
 import bruit_valeurs  # noqa: E402  (lecture des relevés, _order_loc du bot)
-import commun  # noqa: E402
 import reference_jeu  # noqa: E402
 
 TAU = 5.0  # sur T_lambda, T_v, T_ov et T_G ; au-delà de 2 x TAU, une seule position fait une régression
@@ -488,12 +493,15 @@ def lire_lot(dossier, order_loc, seulement=None, sauf=()):
     """Le lot d'un dossier de relevés de rejeu_moteur.py : (positions, lecture).
 
     `positions` : {(phase, puissance): {"A": tirages des recherches A sans engagement, dans l'ordre des
-    tirages ; "tables" : leurs tables ; "numeros" : leurs numéros de tirage ; "recherches" : le bloc
-    search de chaque ligne, A et B ; "reperes" : le type de recherche et le numéro de tirage de chacune
-    de ces lignes ; "structure" : contrôles de relevé en échec ; "lignes", "lignes_b", "fichier"}}. La
-    lecture des tables est celle de bruit_valeurs.lire_releves ; les contrôles (`controles`,
-    `appels_export`) sont relus ligne à ligne. Lève ErreurLot (ou bruit_valeurs.ErreurReleve) sur un lot
-    inutilisable."""
+    numéros de tirage ; "tables" : leurs tables ; "numeros" : leurs numéros de tirage ; "recherches" : le
+    bloc search de chaque ligne, A et B ; "reperes" : le type de recherche et le numéro de tirage de
+    chacune de ces lignes ; "structure" : contrôles de relevé en échec ; "lignes", "lignes_b",
+    "fichier"}}. La lecture des tables est celle de bruit_valeurs.lire_releves ; les contrôles
+    (`controles`, `appels_export`) sont relus ligne à ligne. Chaque ligne de recherche, A ou B, porte un
+    game_id entier et un numéro de tirage entier, positif ou nul, écrit une seule fois par type de
+    recherche dans sa position (#37) : le numéro porte l'identité de la référence (le tirage 0 est la
+    table figée du jeu) et apparie la recherche B à la recherche A de son tirage. Lève ErreurLot (ou
+    bruit_valeurs.ErreurReleve) sur un lot inutilisable."""
     dossier = Path(dossier)
     if not dossier.is_dir():
         raise ErreurLot("%s n'est pas un dossier" % dossier)
@@ -514,27 +522,43 @@ def lire_lot(dossier, order_loc, seulement=None, sauf=()):
     noms = {f.name for f in fichiers}
     positions, parties = {}, set()
     for fichier in fichiers:
-        for releve in commun.lire_lignes(fichier):
+        # lire_releves a déjà lu ces lignes ; le numéro est celui de la ligne dans le fichier, lignes vides comprises.
+        for numero_de_ligne, ligne in enumerate(fichier.read_text(encoding="utf-8").splitlines(), 1):
+            if not ligne.strip():
+                continue
+            releve = json.loads(ligne)
             if "comparaison" in releve:
                 continue
             position = (str(releve["phase"]), str(releve["puissance"]))
-            parties.add(str(releve["game_id"]))
             p = positions.setdefault(position, {
                 "A": [], "tables": [], "numeros": [], "recherches": [], "reperes": [], "structure": [], "lignes": 0,
                 "lignes_b": 0, "fichier": fichier.name})
             if p["fichier"] != fichier.name:
                 raise ErreurLot("deux fichiers pour la position %s (%s, %s) : un lot en a un seul par position ; en "
                                 "écarter un par --sauf ou --seulement" % (nom_position(position), p["fichier"], fichier.name))
+            ou = "%s:%d (%s, recherche %s)" % (fichier, numero_de_ligne, nom_position(position), releve["recherche"])
+            if not reference_jeu._entier(releve["game_id"]):
+                raise ErreurLot("%s : game_id %r ; un entier positif ou nul est attendu" % (ou, releve["game_id"]))
+            if "tirage" not in releve:
+                raise ErreurLot("%s : pas de numéro de tirage ; un lot se lit par numéro de tirage entier, tel que "
+                                "l'écrit rejeu_moteur.py" % ou)
+            numero = releve["tirage"]
+            if not reference_jeu._entier(numero):  # le prédicat du game_id : ni booléen, ni flottant, ni chaîne
+                raise ErreurLot("%s : numéro de tirage %r ; un entier positif ou nul est attendu" % (ou, numero))
+            repere = (str(releve["recherche"]), numero)
+            if repere in p["reperes"]:
+                raise ErreurLot("%s : tirage %d écrit deux fois pour la recherche %s" % (ou, numero, repere[0]))
+            parties.add(str(releve["game_id"]))
             p["lignes"] += 1
             p["lignes_b"] += releve["recherche"] == bruit_valeurs.TYPE_AVEC_ENGAGEMENT
             entree = releve.get("entree")
             p["recherches"].append(entree.get("search") if isinstance(entree, dict) else None)
-            p["reperes"].append((str(releve["recherche"]), releve.get("tirage")))
+            p["reperes"].append(repere)
             for echec in echecs_des_controles(releve):
                 if echec not in p["structure"]:
                     p["structure"].append(echec)
     de_a = [t for t in bruit_valeurs.tables_du_niveau(tables, bruit_valeurs.NIVEAU_DE_LA_SPECIFICATION) if t["fichier"] in noms]
-    for t in sorted(de_a, key=lambda t: (t["fichier"], t["tirage"] is None, t["tirage"] or 0, t["nom"])):
+    for t in sorted(de_a, key=lambda t: (t["fichier"], t["tirage"])):
         p = positions[t["position"][1:]]
         try:
             p["A"].append(tirage(t["entree"]))
@@ -738,11 +762,6 @@ def construire_resume(positions, order_loc):
     return resume, sorted((p for p in positions if p not in retenues), key=ordre_de_la_partie)
 
 
-def nom_du_premier_tirage(lot):
-    """Comment un message désigne la première recherche A d'une position : par son numéro de tirage, s'il est connu."""
-    return "premier tirage" if lot["numeros"][0] is None else "tirage %s" % lot["numeros"][0]
-
-
 def divergences_de_recherche(positions, retenues):
     """Lignes des positions retenues, recherches A et B, dont search.boost ou search.max_prob n'est pas celui de la
     première recherche A de leur position : (nombre de lignes, un texte par grandeur divergente).
@@ -751,20 +770,17 @@ def divergences_de_recherche(positions, retenues):
     (resumer_position) : une autre recherche A qui en aurait d'autres y entrerait sans trace. Et une référence
     passe son propre `comparer`, qui juge chaque ligne du lot, A et B (echecs_de_recherche) : boost et max_prob
     sont des paramètres du lancement, pas du type de recherche. Une ligne sans bloc search est divergente, comme là.
-    Une ligne sans numéro de tirage est nommée par son rang parmi les lignes de son type."""
+    Les lignes sont nommées par leur numéro de tirage : le lot est celui de lire_lot."""
     lignes, divergences = 0, []
     for position in retenues:
         lot = positions[position]
-        premier, rangs = nom_du_premier_tirage(lot), {}
         for (type_de_recherche, numero), recherche in zip(lot["reperes"], lot["recherches"]):
-            rang = rangs[type_de_recherche] = rangs.get(type_de_recherche, -1) + 1
             autres = [(cle, recherche.get(cle) if isinstance(recherche, dict) else None) for cle in ("boost", "max_prob")]
             autres = [(cle, valeur) for cle, valeur in autres if valeur != lot["A"][0][cle]]
             lignes += bool(autres)
             for cle, valeur in autres:
-                divergences.append("%s, tirage %s, recherche %s : search.%s = %r (%s : %r)" % (
-                    nom_position(position), rang if numero is None else numero, type_de_recherche, cle, valeur, premier,
-                    lot["A"][0][cle]))
+                divergences.append("%s, tirage %d, recherche %s : search.%s = %r (tirage %d : %r)" % (
+                    nom_position(position), numero, type_de_recherche, cle, valeur, lot["numeros"][0], lot["A"][0][cle]))
     return lignes, divergences
 
 
@@ -791,9 +807,8 @@ def commande_resumer(args, order_loc):
         table = jeu["tables"].get(phase, {}).get(puissance)
         premiere = positions[(phase, puissance)]["tables"][0]
         numero = positions[(phase, puissance)]["numeros"][0]
-        # Sans aucun numéro de tirage dans le fichier, le rang en tient lieu : la première recherche A est le tirage 0.
-        if numero is not None and numero != 0:
-            differentes.append("%s : pas de tirage 0, le premier lu est le tirage %s" % (nom_position((phase, puissance)), numero))
+        if numero != 0:
+            differentes.append("%s : pas de tirage 0, le premier lu est le tirage %r" % (nom_position((phase, puissance)), numero))
         elif table is None or any(table.get(cle) != premiere.get(cle) for cle in ("order_values", "candidates", "search")):
             differentes.append(nom_position((phase, puissance)))
     if differentes:
@@ -803,9 +818,8 @@ def commande_resumer(args, order_loc):
     # Le tirage 0 a donc le search du jeu ; toutes les lignes, A et B, y sont comparées sur boost et max_prob.
     lignes, divergences = divergences_de_recherche(positions, retenues)
     if divergences:
-        premiers = sorted({nom_du_premier_tirage(positions[p]) for p in retenues})
-        raise ErreurLot("search.boost ou search.max_prob diffère de celui de la recherche A du %s pour %d recherche(s), rien "
-                        "n'est écrit : %s" % (" ou du ".join(premiers), lignes, " ; ".join(divergences)))
+        raise ErreurLot("search.boost ou search.max_prob diffère de celui de la recherche A du tirage 0 pour %d recherche(s), "
+                        "rien n'est écrit : %s" % (lignes, " ; ".join(divergences)))
     import reference_couche_d as couche_d  # état du dépôt, lu comme pour les attendus de la couche D
     modifies = couche_d.arbre_modifie()
     sha = args.sha or couche_d.sha_du_depot()
@@ -820,6 +834,7 @@ def commande_resumer(args, order_loc):
                             % (" et ".join(couche_d.MESURES), couche_d.HORS_MESURES, len(modifies), modifies[0].strip()))
         sha += "-modifie"
     fichiers = sorted({positions[p]["fichier"] for p in retenues})
+    manifeste_d_avant = (dossier / reference_jeu.MANIFESTE).read_bytes()  # remis tel quel si le contrôle refuse (#40)
     reference_jeu.ecrire_json(dossier / reference_jeu.REPETEE, resume)
     reference_jeu.ecrire_manifeste(dossier, dict(jeu["manifeste"], repetee={
         "date": args.date or time.strftime("%Y-%m-%d"), "sha_code": sha, "commande": COMMANDE_RESUMER,
@@ -829,8 +844,13 @@ def commande_resumer(args, order_loc):
         },
     }))
     violations = reference_jeu.controler(dossier)
-    for violation in violations:
-        print("ÉCHEC : %s" % violation)
+    if violations:
+        # Le jeu passait son contrôle avant l'écriture (lire_reference) : on le rend tel qu'il était, octet pour
+        # octet, plutôt qu'un jeu refusé par son propre contrôle et qu'un `resumer` relancé refuserait (« existe déjà »).
+        (dossier / reference_jeu.REPETEE).unlink()
+        (dossier / reference_jeu.MANIFESTE).write_bytes(manifeste_d_avant)
+        raise ErreurLot("le jeu, avec ce résumé, ne passe pas son contrôle (%d violation(s)) : le résumé est retiré et le "
+                        "manifeste remis tel qu'il était, rien n'est gardé.\n  %s" % (len(violations), "\n  ".join(violations)))
     print("Résumé de %d position(s) écrit dans %s (%d octets ; code %s)." % (
         len(retenues), dossier / reference_jeu.REPETEE, (dossier / reference_jeu.REPETEE).stat().st_size, sha))
     print("  %d fichier(s) de relevés, %d recherche(s) A ; tirage 0 égal à la table figée du jeu : %d position(s) sur %d."
@@ -839,7 +859,7 @@ def commande_resumer(args, order_loc):
     if ecartees:
         print("  %d position(s) de moins de %d recherches A, hors couche R : %s"
               % (len(ecartees), N_MIN_REFERENCE, ", ".join(nom_position(p) for p in ecartees)))
-    return 1 if violations else 0
+    return 0
 
 
 def main(argv=None):
