@@ -12,8 +12,8 @@ Trois outils, dont rejeu_moteur.py se sert (--historique, relevé `arguments_exp
 
     python /mesure/capture_reference.py historique GAMEID --sortie /mesure/resultats/historique_GAMEID.json
     python /mesure/capture_reference.py comparer GAMEID --historique /mesure/resultats/historique_GAMEID.json
-    python /mesure/capture_reference.py commandes GAMEID [--phases ...] [--repetees PHASE[:PUISSANCE] ...] [--tirages 5]
-    python3 tests/mesure/capture_reference.py commandes GAMEID --couche-r [--tirages 5]     (lot de la couche R)
+    python3 tests/mesure/capture_reference.py commandes GAMEID [--phases ...] [--repetees PHASE[:PUISSANCE] ...] [--tirages 5]   (sur le poste)
+    python3 tests/mesure/capture_reference.py commandes GAMEID --couche-r [--tirages 5] [--reseau NOM]   (lot de la couche R)
     python3 tests/mesure/capture_reference.py identite --dossier D --sha SHA --image ID     (sur le poste, au lancement)
 
 `historique` et `comparer` lisent le site (GET seulement) et ne lancent aucune
@@ -21,7 +21,10 @@ recherche. `comparer` vérifie, phase par phase, que la position rejouée
 depuis l'historique est celle que rend le site (get_state, clé du plateau).
 `commandes` n'accède à rien : il imprime les commandes de la campagne de capture, ou,
 avec --couche-r, celles d'un lot de la couche R (les positions répétées, rejouées pour
-tests/reference_couche_r.py comparer ; cette suite-là ne relance pas cicero-orders, #33).
+tests/reference_couche_r.py comparer ; tests/mesure/lancer_couche_r.sh les enchaîne).
+Aucune des deux suites ne relance cicero-orders (#33) : chacune relève son état initial,
+à restaurer à la main. `commandes` se lance sur le poste, depuis le dépôt : --phases et
+--repetees sont validés par tests/reference_jeu.py, qu'un conteneur n'a pas.
 --dry-run (historique, comparer) : ni site ni pydipcc, une partie doublée de deux
 phases fait tourner l'extraction, le rejeu et la comparaison.
 
@@ -32,6 +35,7 @@ s'écrivent ainsi dans la commande de capture du manifeste.
 """
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -260,7 +264,8 @@ def lire_partie_du_site(game_id):
     statut = get_status_json(contexte)
     if statut is None:
         raise SystemExit("statut de la partie %s illisible" % game_id)
-    releve = {c: statut.get(c) for c in ("gameID", "turn", "phase", "gameOver", "processStatus", "potType", "phaseLengthInMinutes")}
+    # Pas de processStatus : game/status ne l'expose pas (api/responses/game_state.php), il valait toujours null (#33).
+    releve = {c: statut.get(c) for c in ("gameID", "turn", "phase", "gameOver", "potType", "phaseLengthInMinutes")}
     releve["messages"] = sum(len(p.get("messages") or []) for p in statut.get("phases") or [])
     game = webdip_state_to_game(statut)  # retire les messages du JSON : comptés avant
     releve["phase_courante"] = game.current_short_phase
@@ -298,7 +303,6 @@ def ecrire_identite(dossier, sha_depot, image, date=None):
     reduire --identite). Refuse d'écraser une identité déjà écrite : une campagne
     a une seule identité.
     """
-    import re
     import time
 
     if not re.fullmatch(r"[0-9a-f]{40}", sha_depot or ""):
@@ -318,11 +322,33 @@ def ecrire_identite(dossier, sha_depot, image, date=None):
 # ---------------------------------------------------------------------------
 
 DOCKER = (
-    'docker run --rm{gpu} --network webdiplomacy_default \\\n'
+    'docker run --rm{gpu}{reseau} \\\n'
     '  -v "$PWD/{dossier}:/mesure"{modeles} \\\n'
-    '  -e WEBDIP_API_URL=http://webserver/api.php -e CICERO_REDIS_IP=redis -e CICERO_REDIS_PORT=6379 \\\n'
+    '{environnement}'
     '  cicero-webdip:latest \\\n'
     '  {commande}'
+)
+# Réseau de la pile (compose) : il n'existe que pile démarrée. La campagne de capture lit le site, elle le garde ;
+# un lot de la couche R part sans lui, sur le réseau par défaut de Docker, sauf --reseau (#33).
+RESEAU_DE_LA_PILE = "webdiplomacy_default"
+ENVIRONNEMENT_DE_LA_PILE = "  -e WEBDIP_API_URL=http://webserver/api.php -e CICERO_REDIS_IP=redis -e CICERO_REDIS_PORT=6379 \\\n"
+# Nom de réseau imprimé après --network : il ne commence pas par un tiret (« --privileged » passerait pour une
+# option de docker run). « none » est refusé : un lancement télécharge son vocabulaire au démarrage (#34).
+RESEAU = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*")
+# Dossier d'un lot : sous amont/ (hors git : un lot ne s'écrit ni dans tests/reference ni ailleurs dans le dépôt
+# versionné), chemin relatif à la racine du dépôt, sans « .. » ni composante qui commence par un point ou un
+# tiret ; il est imprimé tel quel dans des lignes de shell. Ni amont/cicero ni amont/webdiplomacy, ni rien
+# dessous : ce sont les clones d'amont, dont outils/exporter_patchs.sh parcourt les fichiers non suivis.
+DOSSIER = re.compile(r"amont/(?!(?:cicero|webdiplomacy)(?:/|\Z))[A-Za-z0-9_][A-Za-z0-9_.-]*(?:/[A-Za-z0-9_][A-Za-z0-9_.-]*)*")
+REGLE_DU_DOSSIER = ("sous amont/, relatif à la racine du dépôt, sans « .. », aucune composante ne commençant par un point ou un tiret, "
+                    "hors des clones d'amont (ni amont/cicero ni amont/webdiplomacy)")
+# État initial de cicero-orders, relevé avant l'arrêt, dans les deux suites ; aucune ne le relance (#33 : le
+# 2026-10-10, le redémarrage imprimé a produit 7 envois d'ordres sur une partie en pause). Conteneur absent
+# (après ./arreter.sh) : docker inspect sort en code 1, l'état vaut « absent » et rien n'est arrêté.
+ETAT_DE_CICERO_ORDERS = (
+    "ETAT=$(docker inspect --format '{{.State.Status}}' cicero-orders 2>/dev/null) || ETAT=absent",
+    'echo "cicero-orders : état initial $ETAT (à restaurer à la main, cette suite ne relance rien)"',
+    '[ "$ETAT" = absent ] || docker stop cicero-orders',
 )
 DOSSIER_DE_CAMPAGNE = "amont/capture-reference"  # hors git, et à part des relevés du 2026-10-03 (amont/mesure)
 # Positions répétées (`--tirages` tirages A + B), fixées par expert-cicero pour #31 et #26 : 21 positions.
@@ -341,6 +367,11 @@ DOSSIER_COUCHE_R = "amont/couche-r"
 # B 24,1 s (110) en moyenne, d'après les duree_s des relevés ; démarrage d'un lancement, 46 s en médiane (durée
 # du lancement dans le journal de la campagne, moins la somme de ses recherches ; de 22 à 67 s).
 DUREES = {"A": 50.5, "B": 24.1, "lancement": 46.0}
+# Le lot de la couche R du 2026-10-11 (les 21 lancements des positions répétées) a duré 14 548 s d'après son
+# journal de campagne, pour 8 799 s estimés par DUREES : 14 548 / 8 799 = 1,653, arrondi au-dessus. La carte
+# graphique était occupée par ailleurs pendant près de deux heures (surcroît de 1,7 à 3,4 Gio) ; le mécanisme du
+# ralentissement n'est pas établi (#33). Les mêmes 21 lancements avaient duré 8 999 s le 2026-10-10.
+MAJORATION_OBSERVEE = 1.66
 
 
 def lire_positions(valeurs):
@@ -349,8 +380,8 @@ def lire_positions(valeurs):
     for valeur in valeurs:
         phase, _, puissance = valeur.partition(":")
         puissances = [puissance.upper()] if puissance else list(commun.POWERS)
-        if puissances[0] not in commun.POWERS:
-            raise SystemExit("position inconnue : %s" % valeur)
+        if puissances[0] not in commun.POWERS or not phase_valide(phase):
+            raise SystemExit("position inconnue : %r" % valeur)
         positions += [(phase, p) for p in puissances if (phase, p) not in positions]
     return positions
 
@@ -376,6 +407,67 @@ def duree_estimee(lancements):
     )
 
 
+def fourchette_de_duree(lancements):
+    """(basse, haute) en secondes : l'estimation tirée de la campagne du 2026-10-10, et elle majorée du rapport observé sur le lot du 2026-10-11."""
+    basse = duree_estimee(lancements)
+    return basse, basse * MAJORATION_OBSERVEE
+
+
+def texte_de_duree(lancements):
+    """La fourchette, telle que les deux suites l'impriment : elle nomme les deux campagnes dont elle vient.
+
+    La borne haute est un rapport appliqué à l'estimation, pas une durée relevée : seul le lot entier de la
+    couche R (21 lancements) a été mesuré le 2026-10-11.
+    """
+    def heures(secondes):
+        return "%d h %02d" % (secondes // 3600, secondes % 3600 // 60)
+
+    basse, haute = fourchette_de_duree(lancements)
+    return ("de %s (campagne du 2026-10-10) à %s (× %s, observé sur les 21 lancements du lot du 2026-10-11, carte "
+            "graphique occupée par ailleurs pendant près de deux heures)"
+            % (heures(basse), heures(haute), ("%.2f" % MAJORATION_OBSERVEE).replace(".", ",")))
+
+
+def phase_valide(valeur):
+    """Vrai si `valeur` est une phase (reference_jeu.est_phase) ; elle est imprimée dans des lignes de shell."""
+    racine = str(Path(__file__).resolve().parent.parent)
+    if racine not in sys.path:
+        sys.path.insert(0, racine)
+    try:
+        import reference_jeu
+    except ImportError:
+        raise SystemExit("validation des phases : tests/reference_jeu.py introuvable (`commandes` se lance depuis le dépôt)")
+    return reference_jeu.est_phase(valeur)
+
+
+def _argument(valide, nature):
+    """Un type d'argparse : la valeur, ou le refus d'argparse (code 2, rien sur la sortie standard)."""
+    def lire(valeur):
+        if not valide(valeur):
+            raise argparse.ArgumentTypeError("%s invalide : %r" % (nature, valeur))
+        return valeur
+
+    return lire
+
+
+def _entier(minimum, nature):
+    """Un type d'argparse : un entier au moins égal à `minimum`, ou le refus d'argparse (code 2)."""
+    def lire(valeur):
+        if not re.fullmatch(r"[0-9]+", valeur) or int(valeur) < minimum:
+            raise argparse.ArgumentTypeError("%s invalide : %r (entier au moins égal à %d)" % (nature, valeur, minimum))
+        return int(valeur)
+
+    return lire
+
+
+def _reseau(valeur):
+    """Le type d'argparse de --reseau : un nom de réseau Docker, sauf « none »."""
+    if valeur == "none":
+        raise argparse.ArgumentTypeError(
+            "réseau Docker invalide : 'none' (un accès sortant à Internet est requis au démarrage de chaque lancement, #34)")
+    return _argument(RESEAU.fullmatch, "réseau Docker")(valeur)
+
+
 def commandes_de_campagne(game_id, phases, repetees, tirages, score, minutes_de_phase, dossier=DOSSIER_DE_CAMPAGNE):
     """Les commandes de la campagne de capture, dans l'ordre ; rien n'est lancé.
 
@@ -384,19 +476,22 @@ def commandes_de_campagne(game_id, phases, repetees, tirages, score, minutes_de_
     `repetees`, un tirage A seul (--engagements aucun) pour les autres ; puis la
     seconde passe. Les relevés vont dans un dossier à part : la réduction prend la
     recherche A du premier tirage de chaque fichier, et ne doit pas tomber sur un
-    relevé plus ancien de la même position.
+    relevé plus ancien de la même position. La suite arrête cicero-orders et ne
+    le relance pas (#33) : elle affiche son état initial, à restaurer à la main.
     """
     historique = "/mesure/resultats/historique_%s.json" % game_id
-    sans_gpu = dict(gpu="", modeles="", dossier=dossier)
-    avec_gpu = dict(gpu=" --gpus all", modeles=' -v "$PWD/amont/cicero/models:/opt/cicero/models:ro"', dossier=dossier)
+    pile = dict(reseau=" --network %s" % RESEAU_DE_LA_PILE, environnement=ENVIRONNEMENT_DE_LA_PILE, dossier=dossier)
+    sans_gpu = dict(pile, gpu="", modeles="")
+    avec_gpu = dict(pile, gpu=" --gpus all", modeles=' -v "$PWD/amont/cicero/models:/opt/cicero/models:ro"')
     reglages = " --score %s" % score + ("" if minutes_de_phase is None else " --minutes-de-phase %s" % minutes_de_phase)
     lancements = plan_de_campagne(phases, repetees, tirages)
-    secondes = duree_estimee(lancements)
     lignes = [
         "# Depuis la racine du dépôt. cicero-orders est arrêté pour les recherches (GPU de 8 Go), après annonce.",
-        "# %d lancements, %d recherches ; durée estimée des recherches : %d h %02d (mesures du 2026-10-10)." % (
+        "# Prérequis : pile démarrée (réseau %s ; l'historique se lit sur le site), image cicero-webdip:latest," % RESEAU_DE_LA_PILE,
+        "#    modèles sous amont/cicero/models.",
+        "# %d lancements, %d recherches ; durée estimée des recherches : %s." % (
             len(lancements), sum(n * (2 if e != "aucun" else 1) for _p, _q, n, e, _x in lancements),
-            secondes // 3600, secondes % 3600 // 60),
+            texte_de_duree(lancements)),
         "mkdir -p %s/resultats && cp tests/mesure/* %s/" % (dossier, dossier),
         "# 0. Identité de la capture, écrite une fois au lancement (le manifeste la reprendra).",
         "python3 tests/mesure/capture_reference.py identite --dossier %s \\\n"
@@ -404,9 +499,9 @@ def commandes_de_campagne(game_id, phases, repetees, tirages, score, minutes_de_
         "# 1. Historique des ordres (GET seulement, aucune recherche), puis contrôle de la position rejouée.",
         DOCKER.format(commande="python /mesure/capture_reference.py historique %s --sortie %s" % (game_id, historique), **sans_gpu),
         DOCKER.format(commande="python /mesure/capture_reference.py comparer %s --historique %s%s" % (game_id, historique, reglages), **sans_gpu),
-        "# 2. Recherches (cicero-orders arrêté).",
-        "docker stop cicero-orders",
-    ]
+        "# 2. Recherches (cicero-orders arrêté). Cette suite ne le relance pas (#33) : noter l'état initial",
+        "#    qu'affiche la deuxième ligne, il se restaure à la main.",
+    ] + list(ETAT_DE_CICERO_ORDERS)
     for phase, puissance, n, engagements, etiquette in lancements:
         if etiquette:
             lignes.append("# Seconde passe de %s %s, dans un fichier distinct (contrôle d'indépendance ; hors réduction)." % (phase, puissance))
@@ -417,7 +512,7 @@ def commandes_de_campagne(game_id, phases, repetees, tirages, score, minutes_de_
             **avec_gpu
         ))
     lignes += [
-        "docker start cicero-orders",
+        "#    cicero-orders est resté arrêté : le remettre à la main dans l'état noté avant les recherches.",
         "# 3. Les relevés bruts sont hors git ET sous amont/, que install.sh peut refaire : les copier ailleurs",
         "#    (hors du dépôt) dès la fin de la campagne ; ils ne se recapturent pas à l'identique.",
         "cp -a %s/resultats <dossier de conservation hors du dépôt>/" % dossier,
@@ -434,35 +529,44 @@ def commandes_de_campagne(game_id, phases, repetees, tirages, score, minutes_de_
     return lignes
 
 
-def commandes_de_la_couche_r(game_id, repetees, tirages, score, minutes_de_phase, dossier=DOSSIER_COUCHE_R):
+def commandes_de_la_couche_r(game_id, repetees, tirages, score, minutes_de_phase, dossier=DOSSIER_COUCHE_R, reseau=None):
     """Les commandes d'un lot de la couche R, dans l'ordre ; rien n'est lancé.
 
     Un lancement par position répétée : `tirages` tirages A + B (--engagements
     auto:prefere), sans seconde passe, dans un dossier à part (un lot a un seul
     fichier de relevés par position). L'historique est celui du jeu d'essai : aucun
-    accès au site. La suite arrête cicero-orders et ne le relance pas (#33) : elle
-    fait noter son état initial, à restaurer à la main. Si `repetees` n'est pas la
+    accès à webDiplomacy, et les lancements partent sans le réseau de la pile, qui
+    peut donc être arrêtée ; `reseau` rétablit `--network` et les variables de la
+    pile. La suite arrête cicero-orders s'il existe et ne le relance pas (#33) : elle
+    affiche son état initial, à restaurer à la main. Si `repetees` n'est pas la
     liste entière des positions répétées (relance d'une position, exécution réduite
     à une phase), la comparaison imprimée les nomme par --positions.
     """
     historique = "/mesure/resultats/historique_%s.json" % game_id
-    avec_gpu = dict(gpu=" --gpus all", modeles=' -v "$PWD/amont/cicero/models:/opt/cicero/models:ro"', dossier=dossier)
+    avec_gpu = dict(
+        gpu=" --gpus all", modeles=' -v "$PWD/amont/cicero/models:/opt/cicero/models:ro"', dossier=dossier,
+        reseau="" if reseau is None else " --network %s" % reseau,
+        environnement="" if reseau is None else ENVIRONNEMENT_DE_LA_PILE,
+    )
     reglages = " --score %s" % score + ("" if minutes_de_phase is None else " --minutes-de-phase %s" % minutes_de_phase)
     lancements = [(phase, puissance, tirages, "auto:prefere", None) for phase, puissance in repetees]
-    secondes = duree_estimee(lancements)
     lignes = [
         "# Lot de la couche R (#31) : depuis la racine du dépôt, à la main ; jamais en CI ni dans un workflow.",
-        "# %d lancements, %d recherches ; durée estimée : %d h %02d (mesures du 2026-10-10)." % (
-            len(lancements), sum(2 * n for _p, _q, n, _e, _x in lancements), secondes // 3600, secondes % 3600 // 60),
+        "# Prérequis : image cicero-webdip:latest, modèles sous amont/cicero/models ; %s." % (
+            "la pile peut être arrêtée (ni son réseau ni cicero-orders ne sont requis)" if reseau is None
+            else "le réseau Docker %s existe (celui de la pile : il n'existe que pile démarrée)" % reseau if reseau == RESEAU_DE_LA_PILE
+            else "le réseau Docker %s existe (celui de la pile, %s, n'existe que pile démarrée)" % (reseau, RESEAU_DE_LA_PILE)),
+        "#    Aucun accès à webDiplomacy ; accès sortant à Internet requis au démarrage de chaque lancement",
+        "#    (vocabulaire GPT-2 téléchargé depuis dl.fbaipublicfiles.com).",
+        "# %d lancements, %d recherches ; durée estimée : %s." % (
+            len(lancements), sum(2 * n for _p, _q, n, _e, _x in lancements), texte_de_duree(lancements)),
         "# Dossier neuf : un relevé plus ancien d'une même position ferait refuser le lot (un fichier par position).",
         "mkdir %s && mkdir %s/resultats && cp tests/mesure/* %s/" % (dossier, dossier, dossier),
-        "# 1. Historique des ordres : celui du jeu d'essai (aucun accès au site).",
+        "# 1. Historique des ordres : celui du jeu d'essai.",
         "cp tests/reference/historique.json %s/resultats/historique_%s.json" % (dossier, game_id),
         "# 2. Recherches. cicero-orders doit être arrêté (GPU de 8 Go), après annonce. Cette suite ne le relance pas",
-        "#    (#33) : noter l'état initial que rend la ligne suivante, il se restaure à la main.",
-        "docker inspect --format '{{.State.Status}}' cicero-orders",
-        "docker stop cicero-orders",
-    ]
+        "#    (#33) : noter l'état initial qu'affiche la deuxième ligne, il se restaure à la main.",
+    ] + list(ETAT_DE_CICERO_ORDERS)
     for phase, puissance, n, engagements, _etiquette in lancements:
         lignes.append(DOCKER.format(
             commande="python /mesure/rejeu_moteur.py %s %s %s %d --historique %s%s --engagements %s"
@@ -498,19 +602,23 @@ def main(argv=None):
     c.add_argument("--minutes-de-phase", type=int)
     c.add_argument("--dry-run", action="store_true", help="partie doublée : ni site ni pydipcc")
     k = commandes.add_parser("commandes", help="imprime les commandes de la campagne de capture, sans rien lancer")
-    k.add_argument("game_id", type=int)
-    k.add_argument("--phases", nargs="+", default=list(PHASES_DE_MOUVEMENT))
+    k.add_argument("game_id", type=_entier(1, "GAME_ID"))
+    k.add_argument("--phases", nargs="+", default=list(PHASES_DE_MOUVEMENT), type=_argument(phase_valide, "phase"))
     k.add_argument("--repetees", nargs="*", metavar="PHASE[:PUISSANCE]",
                    help="positions à `--tirages` tirages A + B (défaut : les 21 de POSITIONS_REPETEES)")
-    k.add_argument("--tirages", type=int, default=5)
+    k.add_argument("--tirages", type=_entier(1, "nombre de tirages"), default=5)
     k.add_argument("--couche-r", action="store_true",
                    help="les commandes d'un lot de la couche R : les positions répétées seules, sans seconde passe, "
                         "dans %s ; cicero-orders n'est pas relancé (--phases est sans objet)" % DOSSIER_COUCHE_R)
-    k.add_argument("--dossier", help="avec --couche-r : dossier du lot, neuf (défaut : %s)" % DOSSIER_COUCHE_R)
+    k.add_argument("--dossier", type=_argument(DOSSIER.fullmatch, "dossier (%s)" % REGLE_DU_DOSSIER),
+                   help="avec --couche-r seulement : dossier du lot, neuf, sous amont/ (défaut : %s)" % DOSSIER_COUCHE_R)
+    k.add_argument("--reseau", metavar="NOM", type=_reseau,
+                   help="avec --couche-r seulement : réseau Docker des lancements, avec les variables de la pile (%s, "
+                        "pile démarrée) ; sans lui, le réseau par défaut de Docker ; « none » est refusé" % RESEAU_DE_LA_PILE)
     # Partie 3, lu dans le statut du site par la session principale : potType « Unranked », que
     # webdip_state_to_game lit comme SCORING_SOS (SCORE_DU_POT), et des phases de 4 320 minutes.
     k.add_argument("--score", choices=sorted(SCORES), default="sos")
-    k.add_argument("--minutes-de-phase", type=int, default=4320)
+    k.add_argument("--minutes-de-phase", type=_entier(0, "durée de phase"), default=4320)
     i = commandes.add_parser("identite", help="écrit l'identité de la capture (SHA du dépôt, image, date) ; sur le poste")
     i.add_argument("--dossier", required=True, help="dossier de la campagne (ex. %s)" % DOSSIER_DE_CAMPAGNE)
     i.add_argument("--sha", required=True, help="git rev-parse HEAD")
@@ -519,10 +627,14 @@ def main(argv=None):
     args = p.parse_args(argv)
 
     if args.commande == "commandes":
+        for option, valeur in (("--dossier", args.dossier), ("--reseau", args.reseau)):
+            if valeur is not None and not args.couche_r:  # sans --couche-r, elle serait ignorée sans le dire
+                k.error("%s ne vaut qu'avec --couche-r" % option)
         repetees = list(POSITIONS_REPETEES) if args.repetees is None else lire_positions(args.repetees)
         if args.couche_r:
             print("\n".join(commandes_de_la_couche_r(
-                args.game_id, repetees, args.tirages, args.score, args.minutes_de_phase, args.dossier or DOSSIER_COUCHE_R)))
+                args.game_id, repetees, args.tirages, args.score, args.minutes_de_phase,
+                args.dossier or DOSSIER_COUCHE_R, args.reseau)))
             return 0
         print("\n".join(commandes_de_campagne(
             args.game_id, args.phases, repetees, args.tirages, args.score, args.minutes_de_phase)))

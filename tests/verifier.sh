@@ -12,7 +12,7 @@ export PYTHONDONTWRITEBYTECODE=1
 statut=0
 ko() { echo "ÉCHEC : $*"; statut=1; }
 
-for f in install.sh demarrer.sh arreter.sh outils/*.sh tests/*.sh cicero/overlay/*.sh webdiplomacy/overlay/**/*.sh; do
+for f in install.sh demarrer.sh arreter.sh outils/*.sh tests/*.sh tests/mesure/*.sh cicero/overlay/*.sh webdiplomacy/overlay/**/*.sh; do
   [ -f "$f" ] || continue
   bash -n "$f" || ko "syntaxe shell : $f"
 done
