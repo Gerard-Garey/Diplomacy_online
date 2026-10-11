@@ -309,14 +309,14 @@ class Reducteur(AvecJeu):
             with self.subTest(entree=entree), self.assertRaises(reference_jeu.Refus):
                 reference_jeu.reduire_releve(dict(self.lignes[0], entree=entree))
 
-    def test_le_premier_releve_d_une_position_l_emporte(self):
+    def test_deux_releves_d_une_position_aucun_ne_l_emporte(self):
         fichier = self.racine / "deux.jsonl"
         seconde = json.loads(json.dumps(self.lignes[0]))
         seconde["entree"]["plans"][0]["value"] = 9.0
         fichier.write_text(json.dumps(self.lignes[0]) + "\n" + json.dumps(seconde) + "\n", encoding="utf-8")
-        tables, doublons = reference_jeu.reduire_fichiers([fichier])
-        self.assertEqual(tables["S1901M"]["ENGLAND"]["plans"][0]["value"], self.lignes[0]["entree"]["plans"][0]["value"])
-        self.assertEqual(doublons, ["deux.jsonl:2 (S1901M ENGLAND)"])
+        with self.assertRaises(reference_jeu.Refus) as refus:
+            reference_jeu.reduire_fichiers([fichier])
+        self.assertIn("deux relevés pour la position S1901M ENGLAND (deux.jsonl:1, deux.jsonl:2)", str(refus.exception))
 
     def test_un_jeu_ne_s_ecrit_pas_par_dessus_un_autre(self):
         with self.assertRaises(reference_jeu.Refus):
@@ -374,6 +374,294 @@ class Reducteur(AvecJeu):
         self.assertEqual(code, 2)
         self.assertIn("--identite, ou bien --date, --sha et --image", sortie)
         self.assertFalse(vers.exists())
+
+    # -- Refus de `reduire` (#38) : code 2, un message qui nomme le fichier et la cause, rien d'écrit --------------
+
+    def refus(self, releves, *options, historique=None, partie=9):
+        """Sortie de `reduire` sur ces relevés (texte d'un fichier, ou chemins) ; vérifie le code 2 et que --vers n'existe pas."""
+        if isinstance(releves, (str, bytes)):
+            fichier = self.racine / "m1_9_releves.jsonl"
+            fichier.write_bytes(releves if isinstance(releves, bytes) else releves.encode("utf-8"))
+            releves = [fichier]
+        if historique is None:
+            historique = self.racine / "historique.json"
+            historique.write_text(json.dumps(self.historique), encoding="utf-8")
+        vers = self.racine / "refuse"
+        code, sortie = self.commande(releves, vers, historique, partie, *options)
+        self.assertEqual(code, 2, sortie)
+        self.assertNotIn("Traceback", sortie)
+        self.assertTrue(sortie.startswith("REFUS : "), sortie)
+        self.assertEqual(len(sortie.splitlines()), 1, sortie)
+        self.assertFalse(vers.exists(), "écrit malgré le refus : %s" % sorted(str(f) for f in vers.rglob("*")))
+        return sortie
+
+    def commande(self, releves, vers, historique, partie, *options):
+        sortie = io.StringIO()
+        with contextlib.redirect_stdout(sortie), contextlib.redirect_stderr(sortie):
+            code = reference_jeu.main(
+                ["reduire"] + [str(r) for r in releves] + ["--historique", str(historique), "--vers", str(vers),
+                 "--partie", str(partie), "--creee-le", "2026-01-01", "--date", "2026-01-02", "--sha", SHA, "--image", "x",
+                 "--commande", "x"] + list(options))
+        return code, sortie.getvalue()
+
+    def texte(self, *lignes):
+        return "".join(json.dumps(ligne) + "\n" for ligne in lignes or self.lignes)
+
+    def test_refus_d_un_releve_tronque_ou_d_une_ligne_invalide(self):
+        entier = self.texte()
+        for nom, texte, ligne in (
+            ("tronqué", entier[:len(entier) - 40], len(self.lignes)),
+            ("ligne invalide", self.texte(self.lignes[0]) + "{pas du JSON}\n" + self.texte(self.lignes[1]), 2),
+            ("clé en double", self.texte(self.lignes[0]) + '{"phase": 1, "phase": 2}\n', 2),
+        ):
+            with self.subTest(nom):
+                sortie = self.refus(texte)
+                self.assertIn("m1_9_releves.jsonl:%d : ligne JSON invalide ou tronquée" % ligne, sortie)
+
+    def test_refus_d_une_ligne_qui_est_une_liste(self):
+        for ligne, type_trouve in (("[1, 2]", "list"), ('"texte"', "str"), ("null", "NoneType")):
+            with self.subTest(ligne):
+                sortie = self.refus(self.texte(self.lignes[0]) + ligne + "\n")
+                self.assertIn("m1_9_releves.jsonl:2 : objet attendu, %s trouvé" % type_trouve, sortie)
+
+    def test_refus_d_un_fichier_qui_n_est_pas_de_l_utf8(self):
+        sortie = self.refus(self.texte().encode("utf-8") + b"\xff\xfe\n")
+        self.assertIn("m1_9_releves.jsonl : relevé qui n'est pas de l'UTF-8", sortie)
+
+    def test_refus_d_un_releve_absent(self):
+        self.assertIn("nulle_part.jsonl : relevé absent ou illisible", self.refus([self.racine / "nulle_part.jsonl"]))
+
+    def test_refus_d_un_historique_absent_ou_invalide(self):
+        fichier = self.racine / "historique_9.json"
+        sortie = self.refus(self.texte(), historique=fichier)
+        self.assertIn("historique_9.json : historique des ordres absent ou illisible", sortie)
+        for nom, contenu, cause in (
+            ("tronqué", json.dumps(self.historique)[:-20], "JSON invalide"),
+            ("non UTF-8", b"\xff{}", "qui n'est pas de l'UTF-8"),
+            ("liste", "[]", "objet attendu, list trouvé"),
+            ("sans phases", "{}", "clé(s) absente(s) ['phases']"),
+            ("phases qui n'en sont pas", '{"phases": 3}', "forme inattendue de l'historique des ordres (TypeError)"),
+            ("ordres en liste", '{"phases": [{"name": "S1901M", "orders": []}]}', "forme inattendue de l'historique des ordres (AttributeError)"),
+            ("nombre non fini", '{"phases": [{"name": "S1901M", "orders": {"FRANCE": [NaN]}}]}', "nombre non fini dans l'historique"),
+        ):
+            with self.subTest(nom):
+                fichier.write_bytes(contenu if isinstance(contenu, bytes) else contenu.encode("utf-8"))
+                sortie = self.refus(self.texte(), historique=fichier)
+                self.assertIn("historique_9.json : ", sortie)
+                self.assertIn(cause, sortie)
+
+    def test_refus_d_un_nombre_non_fini_dans_une_table(self):
+        """`NaN`, `Infinity` et `1e999` se lisent (json.loads) ; ils étaient refusés en cours d'écriture, historique déjà écrit."""
+        modele = self.texte(self.lignes[0], dict(self.lignes[1], entree=dict(self.lignes[1]["entree"], search="ICI")))
+        for nombre in ("NaN", "Infinity", "-Infinity", "1e999", "1" + "0" * 400):
+            with self.subTest(nombre):
+                sortie = self.refus(modele.replace('"ICI"', '{"lambda": %s, "boost": 1, "max_prob": 1}' % nombre))
+                self.assertIn("m1_9_releves.jsonl:2 : nombre non fini dans la table de S1901M FRANCE (search.lambda)", sortie)
+        brut = json.loads(json.dumps(self.lignes[1]))
+        brut["arguments_export"]["action_values"][0][3] = float("inf")
+        self.assertIn("(export_plans.action_values[0].score)", self.refus(self.texte(self.lignes[0], brut)))
+
+    def test_un_nombre_non_fini_hors_de_la_table_n_entre_pas(self):
+        """Ce que le réducteur ne recopie pas (`duree_s`, une recherche non retenue) n'est pas jugé."""
+        fichier = self.racine / "m1_9_releves.jsonl"
+        autre = dict(self.lignes[0], recherche="B", entree=dict(self.lignes[0]["entree"], search={"lambda": float("nan")}))
+        fichier.write_text(self.texte(*([dict(l, duree_s=float("nan")) for l in self.lignes] + [autre])), encoding="utf-8")
+        historique = self.racine / "historique.json"
+        historique.write_text(json.dumps(self.historique), encoding="utf-8")
+        code, sortie = self.commande([fichier], self.racine / "admis", historique, 9)
+        self.assertEqual(code, 0, sortie)
+        self.assertEqual(reference_jeu.controler(self.racine / "admis"), [])
+
+    def test_refus_d_un_fichier_vide(self):
+        for texte in ("", "\n  \n"):
+            with self.subTest(texte=texte):
+                self.assertIn("m1_9_releves.jsonl : relevé vide (aucune ligne)", self.refus(texte))
+        plein = self.racine / "m1_9_plein.jsonl"
+        plein.write_text(self.texte(), encoding="utf-8")
+        (self.racine / "m1_9_vide.jsonl").write_text("", encoding="utf-8")
+        self.assertIn("m1_9_vide.jsonl : relevé vide", self.refus([plein, self.racine / "m1_9_vide.jsonl"]))
+
+    def test_refus_de_zero_table(self):
+        sortie = self.refus(self.texte(*(dict(ligne, recherche="B") for ligne in self.lignes)))
+        self.assertIn("aucune table retenue (recherche A, tirage 0) dans 1 fichier(s) de relevés : m1_9_releves.jsonl", sortie)
+        sortie = self.refus(self.texte(), "--tirage", "4")
+        self.assertIn("aucune table retenue (recherche A, tirage 4)", sortie)
+
+    def test_refus_des_releves_d_une_autre_partie(self):
+        sortie = self.refus(self.texte(), partie=3)
+        self.assertIn("m1_9_releves.jsonl:1 : relevé de la partie 9 (game_id), pas de la partie 3 demandée (--partie)", sortie)
+        for nom, game_id in (("absent", None), ("chaîne", "9"), ("booléen", True), ("flottant", 9.5)):
+            with self.subTest(nom):
+                lignes = [dict(self.lignes[0], game_id=game_id)] + self.lignes[1:]
+                if game_id is None:
+                    del lignes[0]["game_id"]
+                self.assertIn("m1_9_releves.jsonl:1 : relevé de la partie %r (game_id)" % (game_id,), self.refus(self.texte(*lignes)))
+        mele = self.texte(*(self.lignes[:-1] + [dict(self.lignes[-1], game_id=99)]))
+        self.assertIn("m1_9_releves.jsonl:%d : relevé de la partie 99" % len(self.lignes), self.refus(mele))
+
+    def deux_passes(self):
+        """Dossier de relevés où une position a deux fichiers, comme S1903M FRANCE le 2026-10-10 ; rend (dossier, valeur de la première passe)."""
+        dossier = self.racine / "resultats"
+        dossier.mkdir()
+        for ligne in self.lignes:
+            nom = "m1_9_%s_%s_engagements_20260101-000000.jsonl" % (ligne["phase"], ligne["puissance"])
+            (dossier / nom).write_text(self.texte(ligne, dict(ligne, recherche="B")), encoding="utf-8")
+        seconde = json.loads(json.dumps(self.lignes[0]))
+        seconde["entree"]["plans"][0]["value"] = 9.0
+        (dossier / "m1_9_S1901M_ENGLAND_engagements-passe2_20260101-010000.jsonl").write_text(self.texte(seconde), encoding="utf-8")
+        (dossier / "historique_9.json").write_text(json.dumps(self.historique), encoding="utf-8")
+        return dossier, self.lignes[0]["entree"]["plans"][0]["value"]
+
+    def test_refus_d_une_position_en_double(self):
+        """Le motif large (m1_*.jsonl, ou le dossier) prenait la seconde passe, classée avant la première : 139 différences de couche D
+        contre les attendus versionnés (D1r 5, D2 20, D3 91, D4 13, D5 4, D6 6)."""
+        dossier, _ = self.deux_passes()
+        for nom, releves in (("motif large", sorted(dossier.glob("m1_*.jsonl"))), ("dossier", [dossier])):
+            with self.subTest(nom):
+                sortie = self.refus(releves, historique=dossier / "historique_9.json")
+                self.assertIn("deux relevés pour la position S1901M ENGLAND (m1_9_S1901M_ENGLAND_engagements-passe2_20260101-010000.jsonl:1, "
+                              "m1_9_S1901M_ENGLAND_engagements_20260101-000000.jsonl:1)", sortie)
+                self.assertIn("--sauf", sortie)
+
+    def test_sauf_ecarte_la_seconde_passe(self):
+        dossier, premiere = self.deux_passes()
+        for nom, releves in (("motif large", sorted(dossier.glob("m1_*.jsonl"))), ("dossier", [dossier])):
+            with self.subTest(nom):
+                vers = self.racine / ("sauf_" + nom.replace(" ", "_"))
+                code, sortie = self.commande(releves, vers, dossier / "historique_9.json", 9, "--sauf", "*passe2*")
+                self.assertEqual(code, 0, sortie)
+                self.assertIn("écarté (--sauf) : m1_9_S1901M_ENGLAND_engagements-passe2_20260101-010000.jsonl", sortie)
+                table = json.loads((vers / "tables" / "S1901M.json").read_text(encoding="utf-8"))["tables"]["ENGLAND"]
+                self.assertEqual(table["plans"][0]["value"], premiere)
+                self.assertEqual(reference_jeu.controler(vers), [])
+
+    def test_un_fichier_ecarte_par_sauf_n_est_pas_lu(self):
+        dossier, _ = self.deux_passes()
+        (dossier / "m1_9_S1901M_ENGLAND_engagements-passe2_20260101-010000.jsonl").write_bytes(b"\xff{")
+        code, sortie = self.commande([dossier], self.racine / "non_lu", dossier / "historique_9.json", 9, "--sauf", "*passe2*")
+        self.assertEqual(code, 0, sortie)
+
+    def test_sauf_a_le_vocabulaire_de_resumer(self):
+        """Même motif de dossier que la couche R (bruit_valeurs.MOTIF), mêmes motifs de nom (fnmatch) : --sauf '*passe2*'."""
+        import bruit_valeurs
+        self.assertEqual(reference_jeu.MOTIF_RELEVES, bruit_valeurs.MOTIF)
+        dossier, _ = self.deux_passes()
+        retenus, ecartes = reference_jeu.fichiers_de_releves([dossier], ("*passe2*", "*_FRANCE_*"))
+        self.assertEqual(len(retenus), len(self.lignes) - len(PHASES))
+        self.assertEqual(len(ecartes), 1 + len(PHASES))
+
+    def test_refus_quand_rien_n_est_retenu(self):
+        dossier, _ = self.deux_passes()
+        self.assertIn("aucun fichier de relevés retenu (--sauf m1_*)", self.refus([dossier], "--sauf", "m1_*", historique=dossier / "historique_9.json"))
+        (self.racine / "sans_releve").mkdir()
+        self.assertIn("sans_releve : aucun relevé m1_*.jsonl dans ce dossier", self.refus([self.racine / "sans_releve"]))
+
+    def test_refus_d_un_releve_d_une_forme_inattendue(self):
+        modele = self.lignes[0]
+        for nom, ligne, cause in (
+            ("plans qui n'en sont pas", dict(modele, entree=dict(modele["entree"], plans=3)), "forme inattendue du relevé (TypeError)"),
+            ("sans phase", {c: v for c, v in modele.items() if c != "phase"}, "forme inattendue du relevé (KeyError)"),
+            ("action à trois termes", dict(modele, arguments_export=dict(modele["arguments_export"], action_values=[[["A PAR H"], 1, 2]])),
+             "forme inattendue du relevé (ValueError)"),
+            ("phase qui sort du dossier", dict(modele, phase="../../S1901M"), "position qui n'est pas une phase et une puissance"),
+            ("puissance en liste", dict(modele, puissance=["FRANCE"]), "position qui n'est pas une phase et une puissance"),
+            ("entrée absente", dict(modele, entree=None), "entrée exportée : objet attendu, NoneType trouvé"),
+        ):
+            with self.subTest(nom):
+                sortie = self.refus(self.texte(ligne))
+                self.assertIn("m1_9_releves.jsonl:1 : ", sortie)
+                self.assertIn(cause, sortie)
+
+    def test_refus_d_une_identite_absente(self):
+        sortie = self.refus(self.texte(), "--identite", str(self.racine / "identite_capture.json"))
+        self.assertIn("identite_capture.json : identité de la capture absent", sortie)
+
+    def identite(self, *options):
+        """Sortie de `reduire --identite` sans --date, --sha ni --image (que `refus` passe toujours) ; code 2 et rien d'écrit."""
+        code, sortie, vers = self.reduire("--identite", str(self.racine / "identite_capture.json"), *options)
+        self.assertEqual(code, 2, sortie)
+        self.assertNotIn("Traceback", sortie)
+        self.assertEqual(len(sortie.splitlines()), 1, sortie)
+        self.assertFalse(vers.exists(), "écrit malgré le refus : %s" % sorted(str(f) for f in vers.rglob("*")))
+        return sortie
+
+    def test_refus_d_une_identite_dont_un_champ_n_est_pas_une_chaine(self):
+        """`"date": NaN` se lit (json.loads) ; il n'était refusé qu'à l'écriture du manifeste, historique et tables déjà écrits."""
+        fichier = self.racine / "identite_capture.json"
+        modele = {"date": "2026-02-03", "sha_depot": "ab" * 20, "image": "sha256:" + "c" * 64}
+        for cle, valeur, type_trouve in (("date", "NaN", "float"), ("date", "20260203", "int"), ("sha_depot", "null", "NoneType"),
+                                         ("image", '["x"]', "list")):
+            with self.subTest(cle=cle, valeur=valeur):
+                fichier.write_text(json.dumps(dict(modele, **{cle: "ICI"})).replace('"ICI"', valeur), encoding="utf-8")
+                sortie = self.identite()
+                self.assertIn("identite_capture.json : identité de la capture, %s : chaîne attendue, %s trouvé" % (cle, type_trouve), sortie)
+
+    def test_refus_d_une_phase_nulle(self):
+        """Une ligne retenue dont `phase` vaut `null` passait pour non retenue : code 0, une table de moins (#38)."""
+        nulle = dict(self.lignes[0], phase=None)
+        for nom, lignes, numero in (("seule", [nulle], 1), ("parmi d'autres", self.lignes[1:] + [nulle], len(self.lignes))):
+            with self.subTest(nom):
+                sortie = self.refus(self.texte(*lignes))
+                self.assertIn("m1_9_releves.jsonl:%d : position qui n'est pas une phase et une puissance (NoneType, 'ENGLAND')" % numero, sortie)
+        self.assertIn("(NoneType, NoneType)", self.refus(self.texte(dict(nulle, puissance=None))))
+
+    def test_refus_de_deux_fichiers_de_meme_nom(self):
+        """`x/m1_meme.jsonl` et `y/m1_meme.jsonl` : le message de la position en double citait deux fois le même nom, et --sauf ne les départage pas."""
+        chemins = []
+        for sous_dossier in ("x", "y"):
+            (self.racine / sous_dossier).mkdir()
+            chemins.append(self.racine / sous_dossier / "m1_meme.jsonl")
+            chemins[-1].write_text(self.texte(), encoding="utf-8")
+        attendu = "deux fichiers de relevés de même nom : %s et %s" % tuple(chemins)
+        self.assertIn(attendu, self.refus(chemins))
+        self.assertIn(attendu, self.refus([self.racine / "x", self.racine / "y"]))
+        self.assertIn("aucun fichier de relevés retenu", self.refus(chemins, "--sauf", "m1_meme*"))  # écartés : pas lus, pas comparés
+
+    def test_refus_d_un_fichier_donne_deux_fois(self):
+        """Deux écritures du même chemin, ou un dossier et l'un de ses fichiers : refusé d'emblée, chemins complets cités."""
+        dossier, _ = self.deux_passes()
+        fichier = sorted(dossier.glob("m1_*.jsonl"))[-1]
+        historique = dossier / "historique_9.json"
+        for nom, releves in (
+            ("deux fois", [fichier, fichier]),
+            ("deux écritures", [fichier, dossier / "." / fichier.name]),
+            ("dossier et fichier", [dossier, fichier]),
+            ("fichier et dossier", [fichier, dossier]),
+            ("dossier deux fois", [dossier, dossier]),
+        ):
+            with self.subTest(nom):
+                sortie = self.refus(releves, "--sauf", "*passe2*", historique=historique)
+                self.assertIn("fichier de relevés donné deux fois, ou un lien vers lui : ", sortie)
+                self.assertIn(str(dossier), sortie)
+
+    def test_refus_d_un_lien_vers_un_fichier_du_meme_dossier(self):
+        """`m1_lien.jsonl -> m1_un.jsonl` dans un dossier : le fichier est donné deux fois, et --sauf ne lève pas ce refus, jugé avant lui."""
+        dossier = self.racine / "liens"
+        dossier.mkdir()
+        (dossier / "m1_un.jsonl").write_text(self.texte(), encoding="utf-8")
+        os.symlink("m1_un.jsonl", str(dossier / "m1_lien.jsonl"))
+        attendu = "fichier de relevés donné deux fois, ou un lien vers lui : %s et %s" % (dossier / "m1_lien.jsonl", dossier / "m1_un.jsonl")
+        self.assertIn(attendu, self.refus([dossier]))
+        self.assertIn(attendu, self.refus([dossier], "--sauf", "m1_lien*"))
+
+    def test_refus_d_une_boucle_de_liens(self):
+        """`boucle1.jsonl -> boucle2.jsonl -> boucle1.jsonl` : avant Python 3.13, resolve() levait RuntimeError, que main ne rattrapait pas (trace, code 1)."""
+        for un, autre in (("boucle1.jsonl", "boucle2.jsonl"), ("boucle2.jsonl", "boucle1.jsonl")):
+            os.symlink(autre, str(self.racine / un))
+        sortie = self.refus([self.racine / "boucle1.jsonl"])
+        self.assertIn("%s : relevé absent ou illisible (" % (self.racine / "boucle1.jsonl"), sortie)
+
+    def test_refus_d_un_numero_de_partie_negatif(self):
+        """« relevé de la partie -1, pas de la partie -1 demandée » ne disait rien : --partie est un entier positif ou nul (argparse, code 2)."""
+        for partie in ("-1", "1.5", "neuf", "1_0", " 3 ", "٣"):
+            sortie = io.StringIO()
+            with self.subTest(partie), contextlib.redirect_stdout(sortie), contextlib.redirect_stderr(sortie), self.assertRaises(SystemExit) as fin:
+                reference_jeu.main(["reduire", str(self._releves()), "--historique", "h", "--vers", str(self.racine / "refuse"),
+                                    "--creee-le", "2026-01-01", "--commande", "x", "--partie=" + partie])
+            self.assertEqual(fin.exception.code, 2)
+            self.assertIn("--partie: entier positif ou nul attendu, %r trouvé" % partie, sortie.getvalue())
+            self.assertFalse((self.racine / "refuse").exists())
+        self.assertEqual(reference_jeu._numero_de_partie("0"), 0)
 
 
 # ---------------------------------------------------------------------------
@@ -763,6 +1051,18 @@ class Emplacement(AvecJeu):
                 contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(reference_jeu.main(["controler", "--dossier", str(self.dossier), "--racine", str(self.racine)]), 0)
         self.assertEqual(vus, [self.racine])
+
+    def test_la_commande_hors_d_un_depot_git_rend_un_message(self):
+        """`controler --racine` hors d'un dépôt git levait CalledProcessError (#38) : code 2, une ligne, pas de trace."""
+        sortie = io.StringIO()
+        with mock.patch.dict(os.environ, {"GIT_CEILING_DIRECTORIES": str(self.racine.parent)}), \
+                contextlib.redirect_stdout(sortie), contextlib.redirect_stderr(sortie):
+            code = reference_jeu.main(["controler", "--dossier", str(self.dossier), "--racine", str(self.racine)])
+            sans = reference_jeu.main(["controler", "--dossier", str(self.dossier), "--racine", str(self.racine), "--sans-emplacement"])
+        lignes = sortie.getvalue().splitlines()
+        self.assertEqual((code, sans), (2, 0), sortie.getvalue())
+        self.assertTrue(lignes[0].startswith("REFUS : --racine %s : git n'y liste aucun fichier (" % self.racine), lignes[0])
+        self.assertEqual(len(lignes), 2, lignes)  # le refus, puis la ligne du contrôle du seul dossier
 
     def test_le_depot_n_a_aucune_table_hors_de_tests_reference(self):
         self.assertEqual(reference_jeu.controler_emplacement(reference_jeu.RACINE), [])

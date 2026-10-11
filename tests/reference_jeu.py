@@ -5,7 +5,7 @@ Bibliothèque standard seule, ni amont/ ni conteneur. Trois usages :
 
     python3 tests/reference_jeu.py controler [--dossier D] [--racine R]
     python3 tests/reference_jeu.py reduire --historique H.json --vers D --partie N --creee-le DATE \\
-        --sha SHA --image ETIQUETTE --commande "..." RELEVES.jsonl [RELEVES.jsonl ...]
+        --sha SHA --image ETIQUETTE --commande "..." [--sauf MOTIF ...] RELEVES.jsonl [RELEVES.jsonl ...]
     python3 tests/reference_jeu.py manifeste --dossier D
 
 `controler` est appelé par tests/verifier.sh (ADR 0006, décision 3) ; il passe sur un
@@ -13,7 +13,14 @@ dossier absent ou vide (la batterie, elle, exige le manifeste de tests/reference
 des tables, et deux tests sur les seuls noms de fichiers (noms des fichiers d'état,
 extensions en liste fermée : `controler_noms`). `reduire` transforme des relevés de tests/mesure/rejeu_moteur.py
 (bruts, hors git) en jeu d'essai : seule la session principale le lance vers
-tests/reference/, après visa (ADR 0006, décision 6). `manifeste` refait la liste des
+tests/reference/, après visa (ADR 0006, décision 6) ; il refuse, code 2 et rien d'écrit, un relevé, un
+historique ou une identité absent, illisible ou d'une forme inattendue, une valeur non finie, zéro table, une
+autre partie que --partie, un fichier donné deux fois ou deux fichiers de même nom, et deux relevés retenus
+(recherche A, tirage 0) pour une même position, dans deux fichiers ou dans un seul : le fichier d'une position
+répétée porte plusieurs relevés de cette position (ses tirages, recherches A et B), un seul est retenu (--sauf
+écarte des fichiers par leur nom, comme pour `resumer` : la seconde passe s'écarte par --sauf '*passe2*' ; un
+dossier vaut ses m1_*.jsonl). Seul le refus du contrôle final de `construire_jeu` (le jeu écrit ne passe pas
+`controler`), code 2 lui aussi, laisse dans --vers les fichiers écrits, pour être lus. `manifeste` refait la liste des
 fichiers et les tailles d'un jeu dont les fichiers ont changé (attendus régénérés) ; il
 refuse, sans rien écrire, un jeu dont le résumé (repetee.json) n'est plus celui que le manifeste a noté.
 
@@ -47,9 +54,12 @@ Ce qu'un relevé contient en plus n'entre pas : `computed_at`, `gpu`, `duree_s`,
 clés nommées ci-dessus, et le contrôle refuse toute autre clé.
 """
 import argparse
+import errno
+import fnmatch
 import hashlib
 import json
 import math
+import os
 import re
 import subprocess
 import sys
@@ -390,6 +400,9 @@ def reduire_arguments(arguments, candidats=()):
 
 def reduire_releve(ligne, recherche="A", tirage=0, a_sec=False):
     """(phase, puissance, table) pour une ligne de relevé, ou (None, None, raison) si elle n'est pas retenue.
+
+    Une ligne non retenue se reconnaît à sa raison (une chaîne, là où une table est un objet), pas à sa
+    phase : celle d'une ligne retenue est rendue telle qu'elle est écrite, `null` compris.
 
     Retenue : la recherche `recherche` du tirage `tirage` (par défaut la recherche A,
     sans engagement, du premier tirage). Un relevé d'essai à sec (table de la
@@ -962,31 +975,185 @@ def controler_noms(racine=RACINE, fichiers=None):
 # Ligne de commande
 # ---------------------------------------------------------------------------
 
-def _lire_releves(chemins):
-    for chemin in chemins:
-        for numero, ligne in enumerate(Path(chemin).read_text(encoding="utf-8").splitlines(), 1):
-            if ligne.strip():
-                yield "%s:%d" % (Path(chemin).name, numero), json.loads(ligne)
+# Relevés d'un dossier passé à `reduire` : MOTIF de tests/mesure/bruit_valeurs.py (celui que lit `resumer`),
+# recopié ici parce que ce module n'importe que la bibliothèque standard. tests/test_reference.py compare les deux.
+MOTIF_RELEVES = "m1_*.jsonl"
+# Ce qu'une donnée d'une forme imprévue lève à la réduction : un refus, jamais une trace.
+# Ce que tests/mesure/capture_reference.py écrit dans l'identité de la capture, dans l'ordre (date, SHA, image) de `reduire`.
+CLES_IDENTITE = ("date", "sha_depot", "image")
+FORME_INATTENDUE = (RecursionError, TypeError, AttributeError, KeyError, IndexError, ValueError, OverflowError)
 
 
-def reduire_fichiers(chemins, recherche="A", tirage=0, a_sec=False):
-    """{phase: {puissance: table}} des relevés donnés ; le premier relevé retenu d'une position l'emporte.
+def _lire_texte(chemin, quoi):
+    """Le texte d'un fichier d'entrée de `reduire` ; lève Refus, qui nomme le fichier, s'il est absent ou n'est pas de l'UTF-8."""
+    try:
+        return Path(chemin).read_text(encoding="utf-8")
+    except UnicodeDecodeError as e:
+        raise Refus("%s : %s qui n'est pas de l'UTF-8 (octet %d)" % (chemin, quoi, e.start))
+    except OSError as e:
+        raise Refus("%s : %s absent ou illisible (%s)" % (chemin, quoi, e.strerror or type(e).__name__))
 
-    Rend aussi les lignes écartées parce que la position avait déjà sa table.
+
+def _lire_json(chemin, quoi):
+    texte = _lire_texte(chemin, quoi)
+    try:
+        return charger_json(texte)
+    except ValueError as e:
+        raise Refus("%s : %s, JSON invalide (%s)" % (chemin, quoi, str(e)[:80]))
+
+
+def _non_fini(valeur, chemin=""):
+    """Chemin du premier nombre d'une donnée réduite que le format n'admet pas (NaN, inf, entier démesuré), ou None.
+
+    json.loads lit `NaN`, `Infinity` et `1e999` (inf) ; ecrire_json les refuserait en cours d'écriture.
     """
-    tables, doublons = {}, []
-    for origine, ligne in _lire_releves(sorted(str(c) for c in chemins)):
+    if isinstance(valeur, dict):
+        for cle, contenu in valeur.items():
+            trouve = _non_fini(contenu, "%s.%s" % (chemin, str(cle)[:LONGUEUR_ORDRE_MAX]) if chemin else str(cle)[:LONGUEUR_ORDRE_MAX])
+            if trouve is not None:
+                return trouve
+    elif isinstance(valeur, list):
+        for i, contenu in enumerate(valeur):
+            trouve = _non_fini(contenu, "%s[%d]" % (chemin, i))
+            if trouve is not None:
+                return trouve
+    elif isinstance(valeur, (int, float)) and not isinstance(valeur, bool) and not _nombre(valeur):
+        return chemin or "(racine)"
+    return None
+
+
+def lire_identite(chemin):
+    """(date, SHA du dépôt, image) du fichier d'identité de la capture ; lève Refus s'il est absent, illisible ou d'une autre forme.
+
+    Chaque champ est une chaîne : un nombre (`NaN` compris, que json.loads lit) ne passerait qu'à l'écriture
+    du manifeste, historique et tables déjà écrits.
+    """
+    identite = _garder(_lire_json(chemin, "identité de la capture"), CLES_IDENTITE, "%s : identité de la capture" % chemin)
+    for cle in CLES_IDENTITE:
+        if not isinstance(identite[cle], str):
+            raise Refus("%s : identité de la capture, %s : chaîne attendue, %s trouvé" % (chemin, cle, type(identite[cle]).__name__))
+    return tuple(identite[cle] for cle in CLES_IDENTITE)
+
+
+def lire_historique(chemin):
+    """L'historique des ordres du fichier, tel qu'il est écrit ; lève Refus s'il ne se réduit pas (absent, illisible, forme, valeur non finie)."""
+    historique = _lire_json(chemin, "historique des ordres")
+    try:
+        fautif = _non_fini(reduire_historique(historique))
+    except Refus as e:
+        raise Refus("%s : %s" % (chemin, e))
+    except FORME_INATTENDUE as e:
+        raise Refus("%s : forme inattendue de l'historique des ordres (%s)" % (chemin, type(e).__name__))
+    if fautif is not None:
+        raise Refus("%s : nombre non fini dans l'historique des ordres (%s)" % (chemin, fautif))
+    return historique
+
+
+def _lire_releves(chemins):
+    """(« fichier:ligne », relevé) de chaque ligne non blanche ; lève Refus sur un fichier absent, non UTF-8 ou vide,
+    et sur une ligne qui n'est pas un objet JSON (relevé tronqué compris)."""
+    for chemin in chemins:
+        vide = True
+        for numero, ligne in enumerate(_lire_texte(chemin, "relevé").splitlines(), 1):
+            if not ligne.strip():
+                continue
+            vide, origine = False, "%s:%d" % (Path(chemin).name, numero)
+            try:
+                releve = charger_json(ligne)
+            except ValueError as e:
+                raise Refus("%s : ligne JSON invalide ou tronquée (%s)" % (origine, str(e)[:80]))
+            if not isinstance(releve, dict):
+                raise Refus("%s : objet attendu, %s trouvé" % (origine, type(releve).__name__))
+            yield origine, releve
+        if vide:
+            raise Refus("%s : relevé vide (aucune ligne)" % chemin)
+
+
+def fichiers_de_releves(chemins, sauf=()):
+    """(retenus, noms écartés) des fichiers de relevés donnés, triés ; un dossier vaut ses MOTIF_RELEVES.
+
+    `sauf` : motifs de nom (fnmatch), comme --sauf de tests/reference_couche_r.py ; un fichier écarté n'est pas lu.
+    Lève Refus, qui cite les chemins complets, sur un fichier donné deux fois (deux écritures du même chemin,
+    un dossier et l'un de ses fichiers, ou un fichier et un lien symbolique vers lui, fussent-ils dans le même
+    dossier) et sur deux fichiers retenus de même nom : les messages de refus et `sauf` désignent un fichier
+    par son nom, qui doit donc n'en désigner qu'un. Le premier refus est jugé avant `sauf`, qui ne le lève pas ;
+    un chemin qui ne se résout pas (boucle de liens) est refusé comme un relevé illisible.
+    """
+    retenus, ecartes, vus, noms = [], [], {}, {}
+    for chemin in chemins:
+        chemin = Path(chemin)
+        if chemin.is_dir():
+            trouves = sorted(chemin.glob(MOTIF_RELEVES))
+            if not trouves:
+                raise Refus("%s : aucun relevé %s dans ce dossier" % (chemin, MOTIF_RELEVES))
+        else:
+            trouves = [chemin]
+        for fichier in trouves:
+            try:
+                reel = fichier.resolve()
+            except (OSError, RuntimeError) as e:  # RuntimeError : boucle de liens, avant Python 3.13
+                raise Refus("%s : relevé absent ou illisible (%s)" % (fichier, getattr(e, "strerror", None) or os.strerror(errno.ELOOP)))
+            if reel in vus:
+                raise Refus("fichier de relevés donné deux fois, ou un lien vers lui : %s et %s" % (vus[reel], fichier))
+            vus[reel] = fichier
+            if any(fnmatch.fnmatch(fichier.name, motif) for motif in sauf):
+                ecartes.append(fichier.name)
+                continue
+            if fichier.name in noms:
+                raise Refus("deux fichiers de relevés de même nom : %s et %s ; un fichier est désigné par son nom "
+                            "(messages de refus, --sauf) : en renommer un" % (noms[fichier.name], fichier))
+            noms[fichier.name] = fichier
+            retenus.append(str(fichier))
+    if not retenus:
+        raise Refus("aucun fichier de relevés retenu (--sauf %s)" % " ".join(sauf))
+    return sorted(retenus), sorted(ecartes)
+
+
+def reduire_fichiers(chemins, recherche="A", tirage=0, a_sec=False, partie=None, sauf=()):
+    """{phase: {puissance: table}} des relevés donnés, une table par position ; rend aussi les noms des fichiers écartés par `sauf`.
+
+    Lève Refus, qui nomme le fichier et la ligne : relevé illisible ou d'une forme inattendue, nombre non fini
+    dans une table, position d'un relevé retenu qui n'est pas une phase et une puissance (`null` compris),
+    relevé retenu d'une autre partie que `partie` (None : non comparé), deux relevés retenus (recherche
+    `recherche`, tirage `tirage`) pour une même position, dans deux fichiers ou dans un seul (le message nomme
+    les deux : aucun ne l'emporte, on en écarte un par `sauf`), aucune table retenue. Les autres relevés d'une
+    position (autres tirages, autre recherche) ne sont pas retenus : un fichier peut en porter plusieurs.
+    """
+    retenus, ecartes = fichiers_de_releves(chemins, sauf)
+    tables, origines = {}, {}
+    for origine, ligne in _lire_releves(retenus):
         try:
             phase, puissance, table = reduire_releve(ligne, recherche, tirage, a_sec)
+            fautif = _non_fini(table) if isinstance(table, dict) else None
         except Refus as e:
             raise Refus("%s : %s" % (origine, e))
-        if phase is None:
+        except FORME_INATTENDUE as e:
+            raise Refus("%s : forme inattendue du relevé (%s)" % (origine, type(e).__name__))
+        if not isinstance(table, dict):  # ligne non retenue : `table` en est la raison
             continue
-        if puissance in tables.setdefault(phase, {}):
-            doublons.append("%s (%s %s)" % (origine, phase, puissance))
-            continue
-        tables[phase][puissance] = table
-    return tables, doublons
+        if not est_phase(phase) or not isinstance(puissance, str) or puissance not in POWERS:
+            raise Refus("%s : position qui n'est pas une phase et une puissance (%s, %s)" % (origine, _apercu(phase), _apercu(puissance)))
+        if fautif is not None:
+            raise Refus("%s : nombre non fini dans la table de %s %s (%s)" % (origine, phase, puissance, fautif))
+        if partie is not None and (not _entier(ligne.get("game_id")) or ligne["game_id"] != partie):
+            raise Refus("%s : relevé de la partie %s (game_id), pas de la partie %d demandée (--partie)"
+                        % (origine, repr(ligne.get("game_id"))[:40], partie))
+        if (phase, puissance) in origines:
+            raise Refus("deux relevés pour la position %s %s (%s, %s) : un jeu a une table par position ; en écarter un "
+                        "(--sauf MOTIF écarte un fichier par son nom)" % (phase, puissance, origines[phase, puissance], origine))
+        origines[phase, puissance] = origine
+        tables.setdefault(phase, {})[puissance] = table
+    if not tables:
+        raise Refus("aucune table retenue (recherche %s, tirage %s) dans %d fichier(s) de relevés : %s"
+                    % (recherche, tirage, len(retenus), " ".join(Path(f).name for f in retenus[:3]) + (" …" if len(retenus) > 3 else "")))
+    return tables, ecartes
+
+
+def _numero_de_partie(texte):
+    """Type argparse de --partie : un `game_id` n'est pas négatif, et « partie -1, pas la partie -1 demandée » ne dirait rien."""
+    if not (texte.isascii() and texte.isdigit()):  # int() admettrait aussi '1_0', ' 3 ' et '٣'
+        raise argparse.ArgumentTypeError("entier positif ou nul attendu, %r trouvé" % texte[:40])
+    return int(texte)
 
 
 def main(argv=None):
@@ -998,12 +1165,13 @@ def main(argv=None):
                    help="dépôt où chercher une table hors de tests/reference/ et un nom de fichier non admis")
     c.add_argument("--sans-emplacement", action="store_true", help="ne contrôle que le dossier (ni emplacement, ni noms)")
     r = commandes.add_parser("reduire", help="relevés de rejeu_moteur.py -> jeu d'essai (session principale, après visa)")
-    r.add_argument("releves", nargs="+")
+    r.add_argument("releves", nargs="+", help="fichiers de relevés, ou dossier (ses %s)" % MOTIF_RELEVES.replace("%", "%%"))
+    r.add_argument("--sauf", metavar="MOTIF", action="append", help="écarte les fichiers de ce nom (répétable)")
     r.add_argument("--historique", required=True, help="historique des ordres (capture_reference.py historique)")
     r.add_argument("--vers", required=True, help="dossier du jeu, vide ou absent")
     r.add_argument("--recherche", default="A")
     r.add_argument("--tirage", type=int, default=0)
-    r.add_argument("--partie", type=int, required=True, help="numéro local de la partie source")
+    r.add_argument("--partie", type=_numero_de_partie, required=True, help="numéro local de la partie source (entier positif ou nul)")
     r.add_argument("--creee-le", required=True, help="date de création de la partie source")
     r.add_argument("--identite", help="fichier écrit au lancement de la campagne (capture_reference.py identite) : "
                                       "date, SHA du dépôt et identifiant de l'image en sont repris")
@@ -1018,7 +1186,13 @@ def main(argv=None):
     if args.action == "controler":
         violations = controler(args.dossier)
         if not args.sans_emplacement:
-            fichiers = fichiers_du_depot(args.racine)
+            try:
+                fichiers = fichiers_du_depot(args.racine)
+            except (subprocess.CalledProcessError, OSError) as e:  # hors d'un dépôt git, ou git absent
+                motif = (getattr(e, "stderr", None) or b"").decode("utf-8", "replace").strip().splitlines()
+                print("REFUS : --racine %s : git n'y liste aucun fichier (%s) ; --sans-emplacement ne contrôle que le dossier"
+                      % (args.racine, motif[0][:120] if motif else type(e).__name__), file=sys.stderr)
+                return 2
             violations += controler_emplacement(args.racine, fichiers) + controler_noms(args.racine, fichiers)
         for violation in violations:
             print("ÉCHEC : %s" % violation)
@@ -1033,14 +1207,15 @@ def main(argv=None):
     if args.action == "reduire":
         try:
             if args.identite:
-                identite = _garder(charger_json(Path(args.identite).read_text(encoding="utf-8")),
-                                   ("date", "sha_depot", "image"), "identité de la capture")
-                args.date, args.sha, args.image = identite["date"], identite["sha_depot"], identite["image"]
+                args.date, args.sha, args.image = lire_identite(args.identite)
             if None in (args.date, args.sha, args.image):
                 raise Refus("--identite, ou bien --date, --sha et --image")
-            tables, doublons = reduire_fichiers(args.releves, args.recherche, args.tirage)
+            # Les entrées sont lues et réduites avant toute écriture : un refus d'entrée ne laisse rien dans --vers
+            # (le contrôle final de construire_jeu, lui, laisse les fichiers écrits, pour être lus).
+            historique = lire_historique(args.historique)
+            tables, ecartes = reduire_fichiers(args.releves, args.recherche, args.tirage, partie=args.partie, sauf=args.sauf or ())
             manifeste = construire_jeu(
-                args.vers, json.loads(Path(args.historique).read_text(encoding="utf-8")), tables,
+                args.vers, historique, tables,
                 {
                     "partie": {"numero": args.partie, "creee_le": args.creee_le, "nature": NATURE},
                     "capture": {"date": args.date, "sha_code": args.sha, "image": args.image, "commande": args.commande},
@@ -1049,8 +1224,8 @@ def main(argv=None):
         except Refus as e:
             print("REFUS : %s" % e, file=sys.stderr)
             return 2
-        for doublon in doublons:
-            print("écarté (position déjà pourvue) : %s" % doublon)
+        for ecarte in ecartes:
+            print("écarté (--sauf) : %s" % ecarte)
         print("Jeu d'essai écrit dans %s : %d table(s), %d octets hors manifeste." % (
             args.vers, sum(len(t) for t in tables.values()), manifeste["taille_octets"]))
         return 0

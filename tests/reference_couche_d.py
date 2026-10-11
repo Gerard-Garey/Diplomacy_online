@@ -74,9 +74,10 @@ comportement mesuré sur une suite inchangée, jamais la suite elle-même.
 Ce que cette couche est, et n'est pas :
   - D1r est gardée même quand D1 est active : c'est elle qui voit la définition
     d'`order_values` sur une table sans arguments bruts.
-  - La table d'une position est la recherche A du tirage 0 du premier fichier de
-    relevés : une table réelle parmi d'autres, pas « la table typique » de la
-    position (le bruit d'une recherche à l'autre est l'objet de #26 et de la couche R).
+  - La table d'une position est la recherche A du tirage 0 de ses relevés ; elle est unique :
+    `reduire` refuse deux relevés retenus (recherche A, tirage 0) pour une même position, et la
+    seconde passe s'écarte par `--sauf`. C'est une table réelle parmi d'autres, pas
+    « la table typique » (le bruit d'une recherche à l'autre est l'objet de #26 et de la couche R).
   - Un changement de cicero_no_dialogue.prototxt, du patch du moteur, du commit
     épinglé ou de l'image est invisible ici : la couche D rejoue des fonctions
     pures sur des tables figées. Le voir est le rôle de la couche R.
