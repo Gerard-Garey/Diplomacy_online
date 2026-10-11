@@ -65,6 +65,11 @@
    "sha256": "3b28e36777c8968ecfc1c003cda8537ed3d3cece5bd49a318b0370b7c737b1ae"
   },
   {
+   "chemin": "repetee.json",
+   "octets": 19258,
+   "sha256": "d16335e57344753567b92a77bc8adf3f90dd8ed5fd72f49458dbf2abf200178b"
+  },
+  {
    "chemin": "tables/F1901M.json",
    "octets": 25262,
    "sha256": "ad5716e03ad3d70697b1b6770ef5b8f05cd87cd86f680b32f011aded7df5a787"
@@ -95,10 +100,20 @@
    "sha256": "3447eb7959f8406eced0e7c97c57a8e995d7d3cb07b0e40a6ea693d8187350f4"
   }
  ],
- "taille_octets": 403601,
+ "taille_octets": 422859,
  "attendus": {
   "date": "2026-10-10",
   "sha_code": "068e212bcda8639485d2ea0c9bae90265b332da2",
   "commande": "python3 tests/reference_couche_d.py --jeu <dossier> --generer"
+ },
+ "repetee": {
+  "date": "2026-10-11",
+  "sha_code": "a1aa23de3eb259b110f76a7526426b9ab92ae1b6",
+  "commande": "python3 tests/reference_couche_r.py resumer <relevés> --vers <dossier>",
+  "releves": {
+   "fichiers": 21,
+   "recherches": 105,
+   "sha256": "f1203606b229c5649cf3aa2632ce3b2864bba40047a56ebef7ce8d38000477db"
+  }
  }
 }
