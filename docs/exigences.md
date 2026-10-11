@@ -34,6 +34,8 @@ Ce document fixe ce que le projet doit faire ; `CLAUDE.md` renvoie ici pour le f
 
 2.11. **Accord préalable.** Toute modification d'un paramètre ou d'une consigne qui change le comportement ou la force des bots est annoncée au mainteneur, avec son effet attendu, avant d'être appliquée.
 
+2.12. **Référence de non-régression.** Un changement du comportement des bots se mesure contre la référence versionnée de `tests/reference/` (ADR 0006) : les fonctions du projet rejouées à l'identique sur les tables figées, dans la batterie ; les recherches réelles du moteur comparées, avec tolérance, sur les positions répétées, hors batterie. La référence fixe le comportement existant, elle ne le juge pas ; elle repose sur une seule partie (2.10) et ne couvre pas ce que Claude écrit. Elle ne se régénère qu'après visa.
+
 ## 3. Exigences documentaires
 
 3.1. `docs/doc/architecture.md` permet à un lecteur sans accès au code de comprendre qui calcule quoi, par où passe l'information, et ce que le mécanisme des promesses garantit ou non.
