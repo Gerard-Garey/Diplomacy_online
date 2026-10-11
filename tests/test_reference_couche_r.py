@@ -5,9 +5,7 @@ Tables fabriquées, écrites à la main : chaque valeur attendue est calculée d
 commentaire du test. Les cas sur le jeu versionné (lot = la table figée de chaque
 position répétée, K = 1) exigent le résumé du jeu (tests/reference/repetee.json) :
 sans lui ils échouent, aucun n'est sauté. COUCHE_R_JEU=<dossier> les fait porter sur une
-copie du jeu. Un défaut connu porte @echec_attendu(numéro d'issue, __file__) : il dit le
-comportement voulu et échoue aujourd'hui sur une assertion (tests/echecs_attendus.py).
-Ni pile, ni Claude, ni GPU.
+copie du jeu. Ni pile, ni Claude, ni GPU.
 
 Usage : python3 tests/test_reference_couche_r.py
 """
@@ -17,6 +15,7 @@ import io
 import json
 import math
 import os
+import random
 import sys
 import tempfile
 import unittest
@@ -31,7 +30,6 @@ sys.path.insert(0, str(RACINE / "tests"))
 import reference_couche_d as couche_d  # noqa: E402  (état du dépôt, doublé pour `resumer`)
 import reference_couche_r as couche_r  # noqa: E402
 import reference_jeu  # noqa: E402
-from echecs_attendus import echec_attendu  # noqa: E402
 
 JEU = Path(os.environ.get("COUCHE_R_JEU", str(reference_jeu.DOSSIER)))
 SHA = "0123456789abcdef0123456789abcdef01234567"
@@ -217,6 +215,25 @@ class Comparaison(unittest.TestCase):
         c = comparer(table(*ligne) for ligne in REFERENCE)
         self.controle(c, 0.0, 0.0, 0.0, 0.0, (5, 5), "identique", [])
         self.assertEqual((c["d_ln_lambda"], c["d_v_tete"], c["ov_max"], c["G_max"]), (0.0, 0.0, 0.0, 0.0))
+
+    def test_le_verdict_ne_depend_pas_de_l_ordre_des_tirages(self):
+        # Un lot de 5 tirages aux valeurs et aux têtes mêlées, puis ce lot permuté : l'inverse, une rotation, et 20
+        # permutations tirées à graine fixe. Verdict, grandeurs hors tolérance et décomptes strictement égaux.
+        # Les T à 1e-9 près et non à l'identique : une somme non compensée (Python antérieur à 3.12) dépend de l'ordre.
+        lot = [table(0.30, 0.25, 0.010), table(0.33, 0.24, 0.013), table(0.28, 0.31, 0.008, tete="PIC"),
+               table(0.31, 0.26, 0.011), table(0.29, 0.22, 0.009)]
+        attendu = comparer(lot)
+        self.assertEqual((attendu["K"], attendu["tete_lot"]), (5, 4))
+        hasard = random.Random(37)
+        permutations = [lot[::-1], lot[2:] + lot[:2]] + [hasard.sample(lot, len(lot)) for _ in range(20)]
+        self.assertGreater(len({tuple(t["search"]["lambda"] for t in p) for p in permutations}), 10)
+        for permute in permutations:
+            with self.subTest(ordre=[t["search"]["lambda"] for t in permute]):
+                c = comparer(permute)
+                for cle in ("verdict", "hors", "grossier", "K", "tete_lot", "tete_jugee", "couverture", "structure"):
+                    self.assertEqual(c[cle], attendu[cle], cle)
+                for cle in ("T_lambda", "T_v_tete", "T_ov", "T_G"):
+                    self.assertAlmostEqual(c[cle], attendu[cle], delta=1e-9, msg=cle)
 
     def test_lot_d_une_autre_position(self):
         # Aucun ordre stable de la référence dans le lot : couverture nulle, « lot invalide », sans exception.
@@ -701,67 +718,164 @@ class Commandes(AvecDossiers):
         self.assertEqual(couche_r.divergences_de_recherche(positions, [("S1901M", "ENGLAND"), ("S1901M", "FRANCE")]), (
             1, ["S1901M FRANCE, tirage 2, recherche B : search.boost = 2.0 (tirage 1 : 3.0)"]))
 
-    def test_resumer_sans_numero_de_tirage(self):
-        # Relevés sans champ `tirage` : le rang en tient lieu, la première recherche A lue est le tirage 0. Le résumé
-        # est celui des relevés numérotés ; un refus nomme alors le « premier tirage » et le rang de la ligne.
+    def refus_de_lecture(self, lot):
+        """Le message de l'ErreurLot que lire_lot lève sur ce lot ; le test échoue s'il le lit."""
+        with self.assertRaises(couche_r.ErreurLot) as refus:
+            couche_r.lire_lot(lot, order_loc())
+        return str(refus.exception)
+
+    def refus_des_deux_commandes(self, lot, motif):
+        """`resumer` puis `comparer` refusent le lot : code 2, rien sur la sortie standard, un message « couche R : »
+        sans trace, rien d'écrit. `comparer` le lit contre le résumé des relevés sains, posé entre les deux."""
+        manifeste = (self.jeu / "manifeste.json").read_bytes()
+        code, sortie, erreur = self.resumer(lot)
+        self.assertEqual((code, sortie), (2, ""), erreur)
+        self.assertEqual(erreur, "couche R : %s\n" % motif)
+        self.assertIsNone(reference_jeu.lire_repetee(self.jeu))
+        self.assertEqual((self.jeu / "manifeste.json").read_bytes(), manifeste)
         self.assertEqual(self.resumer()[0], 0)
-        resume = (self.jeu / reference_jeu.REPETEE).read_bytes()
-        self.retirer_le_resume()
+        code, sortie, erreur = self.comparer(lot)  # 2, et non le code 1 de « régression »
+        self.assertEqual((code, sortie), (2, ""), erreur)
+        self.assertEqual(erreur, "couche R : %s\n" % motif)
+
+    def test_resumer_sans_numero_de_tirage(self):
+        # Relevés sans champ `tirage` : refusés (#37), le rang ne tient plus lieu de numéro. Le message nomme la
+        # première ligne lue, celle d'ENGLAND ; rien n'est écrit, et `comparer` les refuse de même.
         par_puissance = {p: self.lignes(self.releves, p) for p in PUISSANCES}
         for lignes in par_puissance.values():
             for ligne in lignes:
                 del ligne["tirage"]
-        code, _sortie, erreur = self.resumer(self.ecrire("sans_numero", par_puissance))
-        self.assertEqual((code, erreur), (0, ""))
-        self.assertEqual((self.jeu / reference_jeu.REPETEE).read_bytes(), resume)
-        self.assertEqual(self.comparer(self.racine / "sans_numero")[0], 0)
-        self.retirer_le_resume()
-        par_puissance["FRANCE"][5]["entree"]["search"]["boost"] = 2.0
-        code, _sortie, erreur = self.resumer(self.ecrire("sans_numero_b", par_puissance))
-        self.assertEqual(code, 2)
-        self.assertIn("diffère de celui de la recherche A du premier tirage pour 1 recherche(s), rien n'est écrit : "
-                      "S1901M FRANCE, tirage 2, recherche B : search.boost = 2.0 (premier tirage : 3.0)\n", erreur)
+        lot = self.ecrire("sans_numero", par_puissance)
+        self.refus_des_deux_commandes(
+            lot, "%s:1 (S1901M ENGLAND, recherche A) : pas de numéro de tirage ; un lot se lit par numéro de tirage entier, "
+            "tel que l'écrit rejeu_moteur.py" % (lot / "m1_9_S1901M_ENGLAND_engagements_0.jsonl"))
 
-    @echec_attendu(37, __file__)
-    def test_plus_de_9_recherches_sans_numero_jamais_l_ordre_alphabetique(self):
-        # 12 recherches A sans champ `tirage`, reconnaissables à leur lambda. Deux issues admises, la question de fond de
-        # #37 n'étant pas tranchée : le lot est refusé (ErreurLot), ou il est lu dans l'ordre du fichier. Aujourd'hui le
-        # repli trie sur « fichier:ligne » comme une chaîne : lignes 1, 10, 11, 12, 2, 3...
-        lambdas = [0.010 + i / 1000 for i in range(12)]
-        lignes = [releve(table(0.30, 0.25, lam), "FRANCE", None) for lam in lambdas]
+    def test_plus_de_9_recherches_sans_numero_sont_refusees(self):
+        # 12 recherches A sans champ `tirage` : le lot est refusé dès la ligne 1 (#37). Avant, le repli triait sur
+        # « fichier:ligne » comme une chaîne : lignes 1, 10, 11, 12, 2, 3...
+        lignes = [releve(table(0.30, 0.25, 0.010 + i / 1000), "FRANCE", None) for i in range(12)]
         for ligne in lignes:
             del ligne["tirage"]
-        try:
-            positions, _lecture = couche_r.lire_lot(self.ecrire("douze", {"FRANCE": lignes}), order_loc())
-        except couche_r.ErreurLot:
-            return
-        lus = [t["search"]["lambda"] for t in positions[("S1901M", "FRANCE")]["tables"]]
-        self.assertEqual(len(lus), 12)
-        self.assertNotEqual(lus, [lambdas[i] for i in (0, 9, 10, 11, 1, 2, 3, 4, 5, 6, 7, 8)], "ordre alphabétique")
-        self.assertEqual(lus, lambdas)
+        lot = self.ecrire("douze", {"FRANCE": lignes})
+        motif = ("%s:1 (S1901M FRANCE, recherche A) : pas de numéro de tirage ; un lot se lit par numéro de tirage entier, "
+                 "tel que l'écrit rejeu_moteur.py" % (lot / "m1_9_S1901M_FRANCE_engagements_0.jsonl"))
+        self.assertEqual(self.refus_de_lecture(lot), motif)
+        self.refus_des_deux_commandes(lot, motif)
 
-    @echec_attendu(37, __file__)
+    def test_une_seule_ligne_sans_numero_est_nommee(self):
+        # Dix lignes, la septième sans numéro (recherche A du tirage 3) : le refus nomme cette ligne. Le numéro est celui
+        # du fichier : une ligne vide en tête le décale d'un rang.
+        lignes = self.lignes(self.releves, "FRANCE")
+        self.assertEqual((len(lignes), lignes[6]["recherche"], lignes[6].pop("tirage")), (10, "A", 3))
+        lot = self.ecrire("une", {"FRANCE": lignes})
+        fichier = lot / "m1_9_S1901M_FRANCE_engagements_0.jsonl"
+        self.assertEqual(self.refus_de_lecture(lot), "%s:7 (S1901M FRANCE, recherche A) : pas de numéro de tirage ; un lot se "
+                         "lit par numéro de tirage entier, tel que l'écrit rejeu_moteur.py" % fichier)
+        fichier.write_text("\n" + fichier.read_text(encoding="utf-8"), encoding="utf-8")
+        self.assertIn("%s:8 (S1901M FRANCE, recherche A) : pas de numéro" % fichier, self.refus_de_lecture(lot))
+
+    def test_un_numero_de_tirage_qui_n_est_pas_un_entier_positif_est_refuse(self):
+        # Sur une recherche A puis sur une recherche B du tirage 0 : chaîne, nul, booléen, flottant, négatif. True
+        # vaut 1 et 1.0 vaut 1 pour Python : un tri les accepterait, le type les refuse. La valeur est affichée par %r.
+        # Au-delà de reference_jeu.ENTIER_MAX, le refus est celui du game_id : un seul prédicat d'entier, _entier.
+        trop_grand = reference_jeu.ENTIER_MAX + 1
+        for i, (valeur, affichee) in enumerate((("0", "'0'"), (None, "None"), (True, "True"), (1.0, "1.0"), (-1, "-1"),
+                                                (trop_grand, str(trop_grand)))):
+            for ligne, recherche in ((0, "A"), (1, "B")):
+                with self.subTest(valeur=valeur, recherche=recherche):
+                    lignes = self.lignes(self.releves, "FRANCE")
+                    self.assertEqual((lignes[ligne]["recherche"], lignes[ligne]["tirage"]), (recherche, 0))
+                    lignes[ligne]["tirage"] = valeur
+                    lot = self.ecrire("valeur_%d_%s" % (i, recherche), {"FRANCE": lignes})
+                    self.assertEqual(self.refus_de_lecture(lot), "%s:%d (S1901M FRANCE, recherche %s) : numéro de tirage %s ; un "
+                                     "entier positif ou nul est attendu"
+                                     % (lot / "m1_9_S1901M_FRANCE_engagements_0.jsonl", ligne + 1, recherche, affichee))
+
     def test_des_numeros_de_tirage_de_types_meles_sont_refuses_proprement(self):
         # Le tirage 0 écrit "0", les autres entiers : un refus (code 2, message sur la sortie d'erreur), pour `comparer`
-        # comme pour `resumer`. Aujourd'hui le tri lève TypeError : une trace, et le code 1 de l'interpréteur, qui est
-        # aussi le code « régression » de `comparer`. L'exception est rattrapée ici pour être l'échec attendu.
+        # comme pour `resumer`. Avant #37 le tri levait TypeError : une trace, et le code 1 de l'interpréteur, qui est
+        # aussi le code « régression » de `comparer`.
         par_puissance = {p: self.lignes(self.releves, p) for p in PUISSANCES}
         for ligne in par_puissance["FRANCE"]:
             if ligne["tirage"] == 0:
                 ligne["tirage"] = "0"
         lot = self.ecrire("meles", par_puissance)
-        codes = {}
-        for commande in ("resumer", "comparer"):
-            try:
-                code, _sortie, erreur = self.resumer(lot) if commande == "resumer" else self.comparer(lot)
-            except TypeError as e:
-                codes[commande] = "TypeError : %s" % e
-            else:
-                codes[commande] = (code, erreur.startswith("couche R : "))
-            if commande == "resumer":  # rien n'est écrit ; `comparer` lit ensuite le lot contre le résumé des relevés sains
-                self.assertIsNone(reference_jeu.lire_repetee(self.jeu))
-                self.assertEqual(self.resumer()[0], 0)
-        self.assertEqual(codes, {"resumer": (2, True), "comparer": (2, True)})
+        self.refus_des_deux_commandes(
+            lot, "%s:1 (S1901M FRANCE, recherche A) : numéro de tirage '0' ; un entier positif ou nul est attendu"
+            % (lot / "m1_9_S1901M_FRANCE_engagements_0.jsonl"))
+
+    def test_un_lot_se_lit_dans_l_ordre_des_numeros_de_tirage(self):
+        # 12 recherches A numérotées de 0 à 11, écrites dans un autre ordre : elles sont lues de 0 à 11. Têtes, par
+        # tirage : Z, X x 4, W x 3, Y x 4. X et Y sont ex æquo ; la tête modale est la première observée, donc X dans
+        # l'ordre des tirages, alors que l'ordre du fichier, qui écrit les Y d'abord, donnerait Y.
+        # Ce test passe aussi sur le code antérieur (180a0f1) : il caractérise la règle de tri, que #37 n'a pas
+        # changée, et protège contre un retour à l'ordre du fichier.
+        tetes = dict(Z="A PAR - GAS", X=BUR, W="A PAR H", Y=PIC)
+        lignes = []
+        for numero, lettre in enumerate("ZXXXXWWWYYYY"):
+            t = table(0.30, 0.25, 0.010 + numero / 1000)
+            t["candidates"][0]["orders"] = [tetes[lettre], MAO]
+            t["order_values"][tetes[lettre]] = 0.30
+            lignes.append(releve(t, "FRANCE", numero))
+        du_fichier = [lignes[i] for i in (11, 10, 9, 8, 5, 6, 7, 1, 2, 3, 4, 0)]
+        positions, _lecture = couche_r.lire_lot(self.ecrire("melange", {"FRANCE": du_fichier}), order_loc())
+        lot = positions[("S1901M", "FRANCE")]
+        self.assertEqual(lot["numeros"], list(range(12)))
+        self.assertEqual([t["search"]["lambda"] for t in lot["tables"]], [0.010 + numero / 1000 for numero in range(12)])
+        self.assertEqual([t["lam"] for t in lot["A"]], [0.010 + numero / 1000 for numero in range(12)])
+        self.assertEqual(couche_r.resumer_position(lot["A"], order_loc())["tetes"][0], {"orders": [BUR, MAO], "n": 4})
+        dans_l_ordre_du_fichier = tirages(ligne["entree"] for ligne in du_fichier)
+        self.assertEqual(couche_r.resumer_position(dans_l_ordre_du_fichier, order_loc())["tetes"][0], {"orders": [PIC, MAO], "n": 4})
+
+    def test_un_tirage_ecrit_deux_fois_est_refuse(self):
+        # La recherche A du tirage 4 renumérotée 3 : (A, 3) est écrit deux fois, à la ligne 7 puis à la ligne 9. Le même
+        # numéro sur une recherche A et sur une recherche B est l'unité de mesure, pas un doublon.
+        par_puissance = {p: self.lignes(self.releves, p) for p in PUISSANCES}
+        lignes = par_puissance["FRANCE"]
+        self.assertEqual([(l["recherche"], l["tirage"]) for l in lignes[6:9]], [("A", 3), ("B", 3), ("A", 4)])
+        lignes[8]["tirage"] = 3
+        lot = self.ecrire("double", par_puissance)
+        self.refus_des_deux_commandes(lot, "%s:9 (S1901M FRANCE, recherche A) : tirage 3 écrit deux fois pour la recherche A"
+                                      % (lot / "m1_9_S1901M_FRANCE_engagements_0.jsonl"))
+        lignes = self.lignes(self.releves, "FRANCE")
+        lignes[9]["tirage"] = 3  # la recherche B du tirage 4
+        lot = self.ecrire("double_b", {"FRANCE": lignes})
+        self.assertEqual(self.refus_de_lecture(lot), "%s:10 (S1901M FRANCE, recherche B) : tirage 3 écrit deux fois pour la "
+                         "recherche B" % (lot / "m1_9_S1901M_FRANCE_engagements_0.jsonl"))
+
+    def test_un_game_id_qui_n_est_pas_un_entier_est_refuse(self):
+        # Même prédicat que reference_jeu._entier. Avant #37, "9" et True passaient par str() : le premier se lisait
+        # comme la partie 9. Un game_id absent est refusé par la lecture des relevés (bruit_valeurs.lire_releves).
+        for i, (valeur, affichee) in enumerate((("9", "'9'"), (True, "True"), (9.0, "9.0"), (None, "None"), (-9, "-9"))):
+            with self.subTest(valeur=valeur):
+                lot = self.ecrire("partie_%d" % i, {p: lignes_du_lot(p, game_id=valeur) for p in PUISSANCES})
+                self.assertEqual(self.refus_de_lecture(lot), "%s:1 (S1901M ENGLAND, recherche A) : game_id %s ; un entier "
+                                 "positif ou nul est attendu" % (lot / "m1_9_S1901M_ENGLAND_engagements_0.jsonl", affichee))
+        lignes = self.lignes(self.releves, "FRANCE")
+        del lignes[4]["game_id"]
+        lot = self.ecrire("sans_partie", {"FRANCE": lignes})
+        self.assertEqual(self.refus_de_lecture(lot), "%s:5 : relevé de recherche sans game_id"
+                         % (lot / "m1_9_S1901M_FRANCE_engagements_0.jsonl"))
+        # Par les commandes : code 2, sans trace, rien d'écrit.
+        par_puissance = {p: self.lignes(self.releves, p) for p in PUISSANCES}
+        par_puissance["FRANCE"][3]["game_id"] = "9"
+        lot = self.ecrire("partie_en_chaine", par_puissance)
+        self.refus_des_deux_commandes(lot, "%s:4 (S1901M FRANCE, recherche B) : game_id '9' ; un entier positif ou nul est attendu"
+                                      % (lot / "m1_9_S1901M_FRANCE_engagements_0.jsonl"))
+
+    def test_lire_lot_et_lot_des_tables_rendent_les_memes_cles(self):
+        # comparer_lot reçoit l'un ou l'autre : mêmes clés par position. Les numéros de tirage font la différence :
+        # lire_lot n'en rend que d'entiers, lot_des_tables, fait d'une table sans relevé, n'en a pas.
+        positions, _lecture = couche_r.lire_lot(self.releves, order_loc())
+        des_tables = couche_r.lot_des_tables({"S1901M": {p: self.lignes(self.releves, p)[0]["entree"] for p in PUISSANCES}})
+        self.assertEqual(sorted(positions), sorted(des_tables))
+        for position in positions:
+            self.assertEqual(sorted(positions[position]), sorted(des_tables[position]), position)
+            self.assertEqual(sorted(positions[position]), [
+                "A", "fichier", "lignes", "lignes_b", "numeros", "recherches", "reperes", "structure", "tables"])
+            self.assertEqual(positions[position]["numeros"], [0, 1, 2, 3, 4])
+            self.assertEqual(positions[position]["reperes"], [(r, i) for i in range(5) for r in "AB"])
+            self.assertEqual((des_tables[position]["numeros"], des_tables[position]["reperes"]), ([None], [("A", None)]))
 
     def test_un_lot_accepte_par_resumer_passe_son_propre_comparer(self):
         # L'invariant que le contrôle des recherches protège : `comparer` juge le search de chaque ligne, A et B, contre
@@ -785,12 +899,18 @@ class Commandes(AvecDossiers):
             self.assertEqual((code, erreur), (0, ""), nom)
             self.assertIn("Décision : PAS DE RÉGRESSION", sortie)
             self.retirer_le_resume()
-        # La contraposée, sur le lot que `resumer` refuse : contre le résumé du lot sain, sa recherche B à boost 2 fait
-        # une régression. Sans le refus, la référence échouerait à son propre `comparer`.
-        self.assertEqual(self.resumer()[0], 0)
+        # La contraposée, sur un lot à recherche B divergente : `resumer` le refuse, rien n'est écrit ; contre le résumé
+        # du lot sain, sa recherche B à boost 2 fait une régression. Sans le refus, la référence échouerait à son propre
+        # `comparer` : c'est ce refus que le test fixe, les quatre lots sains passant aussi sans lui.
         par_puissance = {p: self.lignes(self.releves, p) for p in PUISSANCES}
         par_puissance["FRANCE"][5]["entree"]["search"]["boost"] = 2.0
-        code, sortie, _erreur = self.comparer(self.ecrire("b", par_puissance))
+        lot = self.ecrire("b", par_puissance)
+        code, _sortie, erreur = self.resumer(lot)
+        self.assertEqual(code, 2)
+        self.assertIn("S1901M FRANCE, tirage 2, recherche B : search.boost = 2.0 (tirage 0 : 3.0)", erreur)
+        self.assertIsNone(reference_jeu.lire_repetee(self.jeu))
+        self.assertEqual(self.resumer()[0], 0)
+        code, sortie, _erreur = self.comparer(lot)
         self.assertEqual(code, 1)
         self.assertIn("search.boost = 2.0 (référence : 3.0)", sortie)
 
