@@ -32,6 +32,7 @@ sys.dont_write_bytecode = True
 import banc_promesses as banc
 import reference_couche_d as couche_d
 import reference_jeu
+from echecs_attendus import echec_attendu
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "mesure"))
 import capture_reference  # noqa: E402
@@ -1629,12 +1630,22 @@ class Capture(unittest.TestCase):
         for ligne in recherches:
             self.assertIn("--score sos --minutes-de-phase 4320", " ".join(ligne))
         self.assertLess(sortie.index("docker stop cicero-orders"), sortie.index("rejeu_moteur.py"))
-        self.assertIn("docker start cicero-orders", sortie)
         self.assertIn("capture_reference.py identite --dossier amont/capture-reference", sortie)
         self.assertLess(sortie.index("capture_reference.py identite"), sortie.index("docker stop"))
         self.assertIn("--identite amont/capture-reference/resultats/identite_capture.json", sortie)
         self.assertIn("cp -a amont/capture-reference/resultats <dossier de conservation hors du dépôt>/", sortie)
         self.assertIn("43 lancements, 241 recherches ; durée estimée des recherches : 3 h 07", sortie)
+
+    @echec_attendu(33, __file__)
+    def test_la_suite_de_capture_ne_relance_pas_cicero_orders(self):
+        """Comme la suite de la couche R : rien n'est relancé, l'état initial de cicero-orders est relevé avant
+        l'arrêt et son rappel suit les recherches (le 2026-10-10, le redémarrage imprimé a produit 7 envois
+        d'ordres sur une partie en pause)."""
+        sortie = self.commandes()
+        self.assertEqual([ligne for ligne in sortie.splitlines() if "docker start" in ligne], [])
+        self.assertIn("docker inspect --format '{{.State.Status}}' cicero-orders", sortie)
+        self.assertLess(sortie.index("docker inspect --format '{{.State.Status}}' cicero-orders"), sortie.index("docker stop cicero-orders"))
+        self.assertIn("le remettre à la main dans l'état noté", sortie[sortie.rindex("rejeu_moteur.py"):])
 
     def test_commandes_de_la_couche_r(self):
         """Les 21 positions répétées, 5 tirages A + B, sans seconde passe, dans un dossier à part ; rien n'est relancé (#33)."""

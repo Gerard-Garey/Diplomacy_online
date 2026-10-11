@@ -31,6 +31,7 @@ sys.path.insert(0, str(RACINE / "tests"))
 import reference_couche_d as couche_d  # noqa: E402  (état du dépôt, doublé pour `resumer`)
 import reference_couche_r as couche_r  # noqa: E402
 import reference_jeu  # noqa: E402
+from echecs_attendus import echec_attendu  # noqa: E402
 
 JEU = Path(os.environ.get("COUCHE_R_JEU", str(reference_jeu.DOSSIER)))
 SHA = "0123456789abcdef0123456789abcdef01234567"
@@ -720,6 +721,47 @@ class Commandes(AvecDossiers):
         self.assertEqual(code, 2)
         self.assertIn("diffère de celui de la recherche A du premier tirage pour 1 recherche(s), rien n'est écrit : "
                       "S1901M FRANCE, tirage 2, recherche B : search.boost = 2.0 (premier tirage : 3.0)\n", erreur)
+
+    @echec_attendu(37, __file__)
+    def test_plus_de_9_recherches_sans_numero_jamais_l_ordre_alphabetique(self):
+        # 12 recherches A sans champ `tirage`, reconnaissables à leur lambda. Deux issues admises, la question de fond de
+        # #37 n'étant pas tranchée : le lot est refusé (ErreurLot), ou il est lu dans l'ordre du fichier. Aujourd'hui le
+        # repli trie sur « fichier:ligne » comme une chaîne : lignes 1, 10, 11, 12, 2, 3...
+        lambdas = [0.010 + i / 1000 for i in range(12)]
+        lignes = [releve(table(0.30, 0.25, lam), "FRANCE", None) for lam in lambdas]
+        for ligne in lignes:
+            del ligne["tirage"]
+        try:
+            positions, _lecture = couche_r.lire_lot(self.ecrire("douze", {"FRANCE": lignes}), order_loc())
+        except couche_r.ErreurLot:
+            return
+        lus = [t["search"]["lambda"] for t in positions[("S1901M", "FRANCE")]["tables"]]
+        self.assertEqual(len(lus), 12)
+        self.assertNotEqual(lus, [lambdas[i] for i in (0, 9, 10, 11, 1, 2, 3, 4, 5, 6, 7, 8)], "ordre alphabétique")
+        self.assertEqual(lus, lambdas)
+
+    @echec_attendu(37, __file__)
+    def test_des_numeros_de_tirage_de_types_meles_sont_refuses_proprement(self):
+        # Le tirage 0 écrit "0", les autres entiers : un refus (code 2, message sur la sortie d'erreur), pour `comparer`
+        # comme pour `resumer`. Aujourd'hui le tri lève TypeError : une trace, et le code 1 de l'interpréteur, qui est
+        # aussi le code « régression » de `comparer`. L'exception est rattrapée ici pour être l'échec attendu.
+        par_puissance = {p: self.lignes(self.releves, p) for p in PUISSANCES}
+        for ligne in par_puissance["FRANCE"]:
+            if ligne["tirage"] == 0:
+                ligne["tirage"] = "0"
+        lot = self.ecrire("meles", par_puissance)
+        codes = {}
+        for commande in ("resumer", "comparer"):
+            try:
+                code, _sortie, erreur = self.resumer(lot) if commande == "resumer" else self.comparer(lot)
+            except TypeError as e:
+                codes[commande] = "TypeError : %s" % e
+            else:
+                codes[commande] = (code, erreur.startswith("couche R : "))
+            if commande == "resumer":  # rien n'est écrit ; `comparer` lit ensuite le lot contre le résumé des relevés sains
+                self.assertIsNone(reference_jeu.lire_repetee(self.jeu))
+                self.assertEqual(self.resumer()[0], 0)
+        self.assertEqual(codes, {"resumer": (2, True), "comparer": (2, True)})
 
     def test_un_lot_accepte_par_resumer_passe_son_propre_comparer(self):
         # L'invariant que le contrôle des recherches protège : `comparer` juge le search de chaque ligne, A et B, contre
