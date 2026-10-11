@@ -3,9 +3,10 @@
 
 Tables fabriquées, écrites à la main : chaque valeur attendue est calculée dans le
 commentaire du test. Les cas sur le jeu versionné (lot = la table figée de chaque
-position répétée, K = 1) ne s'exécutent que si le jeu porte son résumé
-(tests/reference/repetee.json) ; tant qu'il est absent ils sont sautés, et la dernière
-ligne de la sortie le dit. COUCHE_R_JEU=<dossier> les fait porter sur une copie du jeu.
+position répétée, K = 1) exigent le résumé du jeu (tests/reference/repetee.json) :
+sans lui ils échouent, aucun n'est sauté. COUCHE_R_JEU=<dossier> les fait porter sur une
+copie du jeu. Un défaut connu porte @echec_attendu(numéro d'issue, __file__) : il dit le
+comportement voulu et échoue aujourd'hui sur une assertion (tests/echecs_attendus.py).
 Ni pile, ni Claude, ni GPU.
 
 Usage : python3 tests/test_reference_couche_r.py
@@ -904,9 +905,80 @@ class ControleDuJeu(AvecDossiers):
             "tests/reference_couche_r.py resumer` (session principale, après visa) ; la commande `manifeste` ne refait pas "
             "un résumé"])
         self.assertNotIn("refaire le manifeste", violations[0])
-        # Ce que le message écarte : la commande `manifeste` referait les empreintes, et le résumé retouché passerait.
-        self.assertEqual(reference_jeu.main(["manifeste", "--dossier", str(self.jeu)]), 0)
+        # Ce que le message dit, la commande le fait : `manifeste` refuse le résumé retouché, sans rien écrire.
+        code, erreur = self.manifeste_du_jeu()
+        self.assertEqual(code, 2)
+        self.assertIn("REFUS : %s n'a plus la taille ou l'empreinte que le manifeste a notées pour ce résumé : la commande "
+                      "`manifeste` ne refait pas un résumé, rien n'est écrit." % fichier, erreur)
+        self.assertIn("Le restaurer depuis git avec le manifeste", erreur)
+        self.assertIn("python3 tests/reference_couche_r.py resumer <relevés> --vers %s" % self.jeu, erreur)
+        self.assertEqual((self.jeu / "manifeste.json").read_text(encoding="utf-8"), self.manifeste)
+        self.assertEqual(reference_jeu.controler(self.jeu), violations)
+        # Même refus quand seule l'empreinte a changé (taille égale), et quand le bloc a été retiré à la main.
+        fichier.write_text(self.resume.replace('"n":5', '"n":6'), encoding="utf-8")
+        self.assertEqual(len(fichier.read_bytes()), len(self.resume.encode("utf-8")))
+        self.assertEqual(self.manifeste_du_jeu()[0], 2)
+        sans_bloc = json.loads(self.manifeste)
+        sans_bloc.pop("repetee")
+        (self.jeu / "manifeste.json").write_text(json.dumps(sans_bloc), encoding="utf-8")
+        self.assertEqual(self.manifeste_du_jeu()[0], 2)
+        self.assertEqual(json.loads((self.jeu / "manifeste.json").read_text(encoding="utf-8")), sans_bloc)
+        # La fonction ecrire_manifeste, elle, refait toutes les empreintes : `resumer` et `construire_jeu` s'en servent.
+        reference_jeu.ecrire_manifeste(self.jeu, json.loads(self.manifeste))
         self.assertEqual(reference_jeu.controler(self.jeu), [])
+
+    def manifeste_du_jeu(self, dossier=None):
+        """(code, sortie d'erreur) de la commande `manifeste`."""
+        erreur = io.StringIO()
+        with contextlib.redirect_stderr(erreur):
+            code = reference_jeu.main(["manifeste", "--dossier", str(dossier or self.jeu)])
+        return code, erreur.getvalue()
+
+    def test_les_trois_temps_refont_le_resume(self):
+        # Le chemin que donne le refus « existe déjà » de `resumer` : 1) supprimer le résumé et son bloc ; 2) `manifeste`,
+        # qui passe (le résumé noté n'est plus dans le dossier) ; 3) `resumer`. Le résumé refait est le même.
+        code, _sortie, erreur = self.resumer()
+        self.assertEqual(code, 2)
+        self.assertIn("1) supprimer ce fichier et le bloc « repetee » du manifeste ; 2) python3 tests/reference_jeu.py "
+                      "manifeste --dossier %s ; 3) relancer `resumer`" % self.jeu, erreur)
+        (self.jeu / reference_jeu.REPETEE).unlink()
+        manifeste = json.loads(self.manifeste)
+        manifeste.pop("repetee")
+        reference_jeu.ecrire_json(self.jeu / "manifeste.json", manifeste)
+        self.assertEqual(self.manifeste_du_jeu(), (0, ""))
+        self.assertEqual(reference_jeu.controler(self.jeu), [])
+        self.assertEqual(self.resumer()[0], 0)
+        self.assertEqual((self.jeu / reference_jeu.REPETEE).read_text(encoding="utf-8"), self.resume)
+        self.assertEqual((self.jeu / "manifeste.json").read_text(encoding="utf-8"), self.manifeste)
+        self.assertEqual(reference_jeu.controler(self.jeu), [])
+
+    def test_manifeste_sur_une_table_retouchee_reste_permis(self):
+        # Voulu : pour une table ou l'historique, le contrôle renvoie à la commande `manifeste` (session principale, après visa).
+        fichier = self.jeu / "tables" / "S1901M.json"
+        fichier.write_text(fichier.read_text(encoding="utf-8").replace("0.3", "0.4", 1), encoding="utf-8")
+        violations = reference_jeu.controler(self.jeu)
+        self.assertEqual(len(violations), 1)
+        self.assertIn("tables/S1901M.json %s (taille ou empreinte) : refaire le manifeste" % reference_jeu.NE_CORRESPOND_PLUS,
+                      violations[0])
+        self.assertEqual(self.manifeste_du_jeu(), (0, ""))
+        self.assertEqual([v for v in reference_jeu.controler(self.jeu) if "manifeste.json : fichiers" in v], [])
+
+    def test_manifeste_refuse_un_dossier_sans_manifeste_lisible(self):
+        # Code 2 et un message, jamais une trace ; rien n'est créé ni réécrit.
+        vide = self.racine / "vide"
+        vide.mkdir()
+        for dossier in (vide, self.racine / "nulle_part"):
+            code, erreur = self.manifeste_du_jeu(dossier)
+            self.assertEqual(code, 2)
+            self.assertIn("REFUS : %s absent ou illisible (FileNotFoundError" % (dossier / "manifeste.json"), erreur)
+        self.assertEqual((list(vide.iterdir()), (self.racine / "nulle_part").exists()), ([], False))
+        for texte, motif in (("{pas du JSON", "absent ou illisible (JSONDecodeError"), ("[]\n", "objet attendu, list trouvé"),
+                             ('{"format":1,"format":1}', "absent ou illisible (ValueError"), ("\xff", "absent ou illisible (UnicodeDecodeError")):
+            (self.jeu / "manifeste.json").write_bytes(texte.encode("latin-1"))
+            code, erreur = self.manifeste_du_jeu()
+            self.assertEqual(code, 2, texte)
+            self.assertIn(motif, erreur)
+            self.assertEqual((self.jeu / "manifeste.json").read_bytes(), texte.encode("latin-1"))
 
     def test_generer_ne_conseille_pas_d_enteriner_un_resume_retouche(self):
         # Le refus de --generer (couche D) devant une violation portée par le résumé : le restaurer ou le refaire
@@ -963,8 +1035,8 @@ class ControleDuJeu(AvecDossiers):
 # ---------------------------------------------------------------------------
 
 RESUME_ABSENT = (
-    "%s absent de %s : les cas de la couche R sur le jeu versionné sont sautés ; il se pose par la session principale, "
-    "après visa (%s)" % (reference_jeu.REPETEE, JEU, couche_r.COMMANDE_RESUMER))
+    "%s absent de %s ou illisible : le résumé des positions répétées est exigé, les cas de la couche R sur le jeu "
+    "versionné échouent (le restaurer depuis git avec le manifeste)" % (reference_jeu.REPETEE, JEU))
 
 
 def resume_du_jeu():
@@ -974,17 +1046,18 @@ def resume_du_jeu():
         return None
 
 
-@unittest.skipIf(resume_du_jeu() is None, RESUME_ABSENT)
 class JeuVersionne(unittest.TestCase):
     """Valeurs figées sur le résumé des 21 positions répétées (relevés du 2026-10-10, première passe).
 
     Une table n'est pas un lot : K = 1 rend toute exécution « non concluant » ; ces cas ne jugent que le
-    comparateur, k_min ramené à 1."""
+    comparateur, k_min ramené à 1. Le résumé est exigé : sans lui la classe échoue, elle n'est pas sautée."""
 
     @classmethod
     def setUpClass(cls):
+        cls.resume = resume_du_jeu()
+        if cls.resume is None:
+            raise AssertionError(RESUME_ABSENT)
         cls.jeu = reference_jeu.lire_jeu(JEU)
-        cls.resume = reference_jeu.lire_repetee(JEU)
         cls.references = couche_r.references_du_resume(cls.resume)
 
     def lot(self, mutation=None):
@@ -1060,8 +1133,4 @@ class JeuVersionne(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    programme = unittest.main(exit=False)
-    if resume_du_jeu() is None:
-        # La dernière ligne de la sortie : tests/verifier.sh n'en affiche que la fin.
-        print("Couche R : %s." % RESUME_ABSENT)
-    sys.exit(0 if programme.result.wasSuccessful() else 1)
+    unittest.main()

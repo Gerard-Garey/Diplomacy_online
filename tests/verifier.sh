@@ -28,8 +28,9 @@ done < <(find cicero/overlay webdiplomacy/overlay tests -name '*.py')
 # En cas d'échec, la sortie entière est affichée : elle nomme les tests en cause.
 # Un défaut connu y est un échec attendu (« expected failures ») ; un succès inattendu
 # fait sortir unittest en erreur : la marque est alors à retirer du test.
-# tests/test_reference_couche_r.py (couche R, #31) : ses cas sur le jeu versionné sont sautés tant que
-# tests/reference/repetee.json n'y est pas (posé par la session principale, après visa) ; sa dernière ligne le dit.
+# Le jeu d'essai versionné est exigé (#31) : tests/test_reference.py en fixe les planchers (tables, phases,
+# positions répétées, grandeurs de la couche D) et les cas de tests/test_reference_couche_r.py sur
+# tests/reference/repetee.json échouent s'il n'y est pas ; aucun n'est sauté.
 for t in tests/test_etat_dialogue.py tests/test_promesses.py tests/test_bruit_valeurs.py tests/test_reference.py \
     tests/test_reference_couche_r.py; do
   if sortie=$(env -u PYTHONDONTWRITEBYTECODE python3 "$t" 2>&1); then
@@ -48,13 +49,15 @@ fi
 # Jeu d'essai figé (ADR 0006, décision 3), contrôlé par script : emplacement unique (aucune table
 # de recherche dans un .json ou .jsonl hors de tests/reference/), clés en liste blanche, aucune
 # chaîne qui ne soit un ordre, une puissance, une phase ou un mot du format, plafond de 512 Kio.
-# Passe sur un dossier absent ou vide. Avec lui, deux tests sur les seuls noms des fichiers du dépôt
+# Le manifeste est exigé : la commande passe sur un dossier absent ou vide (un jeu se construit à partir
+# de rien), pas la batterie. Avec ce contrôle, deux tests sur les seuls noms des fichiers du dépôt
 # (ADR 0006, annotation, point D) : aucun fichier d'état d'une instance ni aucune de ses copies
 # (nom de base qui contient current_plans, pseudo_commitments ou claude_dialogue_state, et .json),
 # extensions en liste fermée
 # (EXTENSIONS_ADMISES de tests/reference_jeu.py : une extension nouvelle s'y ajoute dans le commit
 # qui introduit le fichier). Les contrôles de plus bas (chemin personnel, jeton,
 # donnée d'exécution) s'appliquent aussi à ce dossier.
+[ -f tests/reference/manifeste.json ] || ko "tests/reference/manifeste.json absent : la référence de non-régression est exigée (la restaurer depuis git ; ADR 0006)"
 if sortie=$(env -u PYTHONDONTWRITEBYTECODE python3 tests/reference_jeu.py controler 2>&1); then
   echo "$sortie" | tail -n 1
 else
@@ -62,7 +65,8 @@ else
   ko "tests/reference/, une table hors de ce dossier ou un nom de fichier non admis (voir ci-dessus ; ADR 0006)"
 fi
 # Couche D de la référence de non-régression (#31) : fonctions pures rejouées sur le jeu d'essai,
-# comparées à l'identique à ses attendus. Ne compare rien, et le dit, tant que le jeu est vide.
+# comparées à l'identique à ses attendus. Sur un jeu vide le script ne compare rien, le dit et rend 0 :
+# c'est le contrôle du manifeste, ci-dessus, et les planchers de tests/test_reference.py qui l'interdisent ici.
 # Une différence n'appelle pas une régénération : elle s'explique, ligne par ligne, ou se corrige.
 if sortie=$(env -u PYTHONDONTWRITEBYTECODE python3 tests/reference_couche_d.py 2>&1); then
   echo "$sortie"

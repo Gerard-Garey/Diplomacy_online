@@ -431,7 +431,7 @@ class Controle(AvecJeu):
         self.une_violation("tables.FRANCE", "clé absente", "'search'")
 
     def test_puissance_inconnue(self):
-        self.modifier("tables/S1901M.json", lambda d: d["tables"].update(jerem=d["tables"]["FRANCE"]))
+        self.modifier("tables/S1901M.json", lambda d: d["tables"].update(NARNIA=d["tables"]["FRANCE"]))
         self.une_violation("tables (clé)", "n'est pas une puissance")
 
     # --- aucun texte de message
@@ -1723,10 +1723,17 @@ class EssaiASec(unittest.TestCase):
     Sur la table fabriquée, que tests/reference/ soit rempli ou non : ces tests ne dépendent pas du jeu d'essai.
     """
 
-    def lancer(self, *options):
+    def lancer(self, *options, arret_attendu=False, plans=None):
+        """(sortie, relevés) d'un lancement à sec. `arret_attendu` : la sortie en erreur du lancement (SystemExit) est
+        gardée dans self.arret au lieu d'être levée, les relevés écrits avant elle sont rendus. `plans` : les plans
+        d'une table S1902M / ITALY posée comme référence de la doublure (sinon aucune : table fabriquée)."""
+        self.arret = None
         with tempfile.TemporaryDirectory() as tmp:
             historique = Path(tmp) / "historique.json"
             historique.write_text(json.dumps(capture_reference.HISTORIQUE_DOUBLURE), encoding="utf-8")
+            if plans is not None:
+                reference_jeu.ecrire_json(Path(tmp) / "sans_reference" / "tables" / "S1902M.json",
+                                          {"phase": "S1902M", "tables": {"ITALY": {"plans": plans}}})
             options = [str(historique) if o == "HISTORIQUE" else o for o in options]
             sortie = io.StringIO()
             # main() règle le journal racine (niveau INFO, un gestionnaire de plus) : l'essai tourne sans les
@@ -1742,6 +1749,10 @@ class EssaiASec(unittest.TestCase):
                     mock.patch.dict("os.environ"), contextlib.redirect_stdout(sortie):
                 try:
                     rejeu_moteur.main()
+                except SystemExit as e:
+                    if not arret_attendu:
+                        raise
+                    self.arret = e
                 finally:
                     racine.setLevel(niveau)
             releves = [
@@ -1819,11 +1830,44 @@ class EssaiASec(unittest.TestCase):
         self.assertIn("tirage 2 engagements fabriqués : ['A PIC H'] (premier choix ; figé au tirage 0)", sortie)
 
     def test_sans_engagement_possible_au_tirage_0_aucune_recherche_b(self):
-        """Rien à promettre au tirage 0 : c'est figé aussi, aucun tirage ne fait de recherche B."""
+        """Rien à promettre au tirage 0 : c'est figé aussi, aucun tirage ne fait de recherche B ; les recherches A sont
+        relevées, puis le lancement le dit et sort en erreur (une position sans recherche B ne passe pas inaperçue)."""
         with mock.patch.object(rejeu_moteur.commun, "choisir_engagements", lambda entree, mode: ([], "aucune alternative")):
-            _sortie, releves = self.lancer("3", "S1902M", "ITALY", "2", "--engagements", "auto:alternative")
+            sortie, releves = self.lancer("3", "S1902M", "ITALY", "2", "--engagements", "auto:alternative", arret_attendu=True)
         self.assertEqual([(r["tirage"], r["recherche"]) for r in releves], [(0, "A"), (1, "A")])
         self.assertEqual(releves[1]["engagement_fige"], [])
+        self.assertEqual(sortie.count("recherche B non faite"), 2)
+        self.assertIn("M1 terminé : ", sortie)  # les relevés sont écrits avant la sortie en erreur
+        self.assertIsNotNone(self.arret, "le lancement sort en code 0")
+        # Un message en guise de code : l'interpréteur l'écrit sur la sortie d'erreur et rend 1.
+        self.assertIsInstance(self.arret.code, str)
+        self.assertRegex(self.arret.code, r"^ÉCHEC : --engagements auto:alternative n'a trouvé aucun engagement à fabriquer sur "
+                                          r"la recherche A du tirage 0 \(aucune alternative\) : engagement figé vide, aucune "
+                                          r"recherche B pour S1902M ITALY sur 2 tirage\(s\)\. Les recherches A sont relevées "
+                                          r"dans .*/m1_3_S1902M_ITALY_engagements_[0-9-]+\.jsonl\.$")
+
+    def test_table_qui_n_offre_pas_d_alternative(self):
+        """Le même cas sans doubler le choix : une table de référence dont les plans jouent tous les mêmes ordres
+        n'exporte qu'une action, auto:alternative n'y trouve rien, auto:prefere y trouve encore un ordre."""
+        plans = [{"rank": i + 1, "orders": ["A VEN H", "F NAP H"], "value": 0.2 - i / 100, "cost_vs_best": i / 100} for i in range(2)]
+        _sortie, releves = self.lancer("3", "S1902M", "ITALY", "2", "--engagements", "auto:alternative", arret_attendu=True, plans=plans)
+        self.assertEqual([(r["tirage"], r["recherche"]) for r in releves], [(0, "A"), (1, "A")])
+        self.assertEqual(len(releves[0]["entree"]["plans"]), 1)
+        self.assertIn("(aucune alternative ne s'écarte du plan préféré) : engagement figé vide", self.arret.code)
+        _sortie, releves = self.lancer("3", "S1902M", "ITALY", "2", "--engagements", "auto:prefere", arret_attendu=True, plans=plans)
+        self.assertEqual([(r["tirage"], r["recherche"]) for r in releves], [(0, "A"), (0, "B"), (1, "A"), (1, "B")])
+        self.assertIsNone(self.arret)
+
+    def test_les_autres_modes_ne_sortent_pas_en_erreur_sans_recherche_b(self):
+        """Le signal ne porte que sur l'engagement figé (auto:*) : --engagements aucun ne fait pas de recherche B par
+        construction, et un fichier d'engagements vide reste un choix de l'appelant."""
+        _sortie, releves = self.lancer("3", "S1902M", "ITALY", "2", "--engagements", "aucun", arret_attendu=True)
+        self.assertEqual(([r["recherche"] for r in releves], self.arret), (["A", "A"], None))
+        with tempfile.TemporaryDirectory() as tmp:
+            fichier = Path(tmp) / "engagements.json"
+            fichier.write_text("[]", encoding="utf-8")
+            _sortie, releves = self.lancer("3", "S1902M", "ITALY", "1", "--engagements", str(fichier), arret_attendu=True)
+        self.assertEqual(([r["recherche"] for r in releves], self.arret), (["A"], None))
 
     def test_etiquette_dans_le_nom_du_fichier(self):
         """La seconde passe écrit un fichier que le motif de la réduction (m1_*_engagements_*.jsonl) ne prend pas."""
@@ -1848,6 +1892,38 @@ class EssaiASec(unittest.TestCase):
         self.assertIn("renfort non composé B -> C : probabilités égales : False ; croissantes : True", sortie)
         sortie, _releves = self.lancer("3", "S1902M", "ITALY", "1", "--incremental")
         self.assertIn("renfort non composé B -> C : probabilités égales : True ; croissantes : False", sortie)
+
+
+# Planchers du jeu d'essai versionné (tests/reference/, posé le 2026-10-10 et résumé le 2026-10-11). Le jeu peut
+# grandir ; il ne peut pas s'amenuiser ni disparaître sans que cette constante change, dans le même commit, après visa.
+PHASES_DU_JEU = ("S1901M", "F1901M", "S1902M", "F1902M", "S1903M", "F1903M")
+TABLES_DU_JEU = 42  # 6 phases x 7 puissances
+POSITIONS_REPETEES_DU_JEU = 21
+GRANDEURS_DU_JEU = 24770  # comparées par la couche D
+
+
+class JeuDuDepot(unittest.TestCase):
+    """Le jeu d'essai du dépôt est exigé par la batterie : absent, vide ou amenuisé, il la fait échouer.
+
+    Les fonctions (`controler`, la couche D) passent sur un dossier absent ou vide, et un manifeste refait
+    sur un jeu raccourci est fidèle à son dossier : sans ces planchers, une référence qui disparaît ou perd
+    une phase laissait la batterie verte, la couche D rendant 0 différence sur ce qui restait."""
+
+    def test_planchers_du_jeu_versionne(self):
+        dossier = reference_jeu.DOSSIER
+        self.assertTrue((dossier / reference_jeu.MANIFESTE).is_file(), "%s absent : la référence de non-régression "
+                        "est exigée (la restaurer depuis git)" % (dossier / reference_jeu.MANIFESTE))
+        jeu = reference_jeu.lire_jeu(dossier)
+        self.assertEqual(tuple(jeu["tables"]), PHASES_DU_JEU)
+        self.assertEqual({phase: list(tables) for phase, tables in jeu["tables"].items()},
+                         {phase: reference_jeu.POWERS for phase in PHASES_DU_JEU})
+        self.assertEqual(sum(len(tables) for tables in jeu["tables"].values()), TABLES_DU_JEU)
+        resume = reference_jeu.lire_repetee(dossier)
+        self.assertIsNotNone(resume, "%s absent : le résumé des positions répétées (couche R) est exigé" % reference_jeu.REPETEE)
+        self.assertEqual(sum(len(par_puissance) for par_puissance in resume["positions"].values()), POSITIONS_REPETEES_DU_JEU)
+        _lignes, grandeurs, sans_attendus = couche_d.comparer(couche_d.attendus_complets(jeu), couche_d.calculer(jeu))
+        self.assertEqual(sans_attendus, [])
+        self.assertGreaterEqual(grandeurs, GRANDEURS_DU_JEU)
 
 
 class Hygiene(unittest.TestCase):

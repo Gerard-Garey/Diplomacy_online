@@ -20,7 +20,10 @@ est choisi une fois, sur la recherche A du tirage 0, et gardé pour tous les tir
 du lancement (les recherches B d'une position se comparent alors à engagement
 égal). Chaque ligne de relevé le porte, avec sa raison (`engagement_fige`,
 `raison_de_l_engagement`, `engagement_choisi_au_tirage`) ; la seule ligne écrite
-avant le choix, la recherche A du tirage 0, les porte nuls. Le mode --incremental
+avant le choix, la recherche A du tirage 0, les porte nuls. Si ce choix est vide
+(table A absente, ou table qui n'offre pas le cas), aucun tirage ne fait de recherche
+B : les relevés des recherches A sont écrits, puis le lancement le dit et sort en
+erreur (code 1), pour qu'une position sans recherche B ne passe pas inaperçue. Le mode --incremental
 garde son choix par tirage : sa promesse doit être tenue par l'action rendue.
 --etiquette X : le nom du fichier de relevés porte X après le mode (seconde passe
 d'une position dans un fichier distinct, que la réduction ne prend pas).
@@ -549,6 +552,12 @@ def main():
             )
 
     print("M1 terminé : %s" % sortie, flush=True)
+    if fige["tirage"] is not None and not fige["ordres"]:
+        # L'engagement figé est vide : aucun tirage n'a eu de recherche B. Les relevés sont écrits ; le code le signale.
+        raise SystemExit(
+            "ÉCHEC : --engagements %s n'a trouvé aucun engagement à fabriquer sur la recherche A du tirage %d (%s) : "
+            "engagement figé vide, aucune recherche B pour %s %s sur %d tirage(s). Les recherches A sont relevées dans %s."
+            % (args.engagements, fige["tirage"], fige["raison"], args.phase, args.puissance, args.n_tirages, sortie))
 
 
 if __name__ == "__main__":

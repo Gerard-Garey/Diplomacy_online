@@ -9,12 +9,13 @@ Bibliothèque standard seule, ni amont/ ni conteneur. Trois usages :
     python3 tests/reference_jeu.py manifeste --dossier D
 
 `controler` est appelé par tests/verifier.sh (ADR 0006, décision 3) ; il passe sur un
-dossier absent ou vide. Avec le dossier, il contrôle le dépôt entier : emplacement unique
+dossier absent ou vide (la batterie, elle, exige le manifeste de tests/reference/). Avec le dossier, il contrôle le dépôt entier : emplacement unique
 des tables, et deux tests sur les seuls noms de fichiers (noms des fichiers d'état,
 extensions en liste fermée : `controler_noms`). `reduire` transforme des relevés de tests/mesure/rejeu_moteur.py
 (bruts, hors git) en jeu d'essai : seule la session principale le lance vers
 tests/reference/, après visa (ADR 0006, décision 6). `manifeste` refait la liste des
-fichiers et les tailles d'un jeu dont les fichiers ont changé (attendus régénérés).
+fichiers et les tailles d'un jeu dont les fichiers ont changé (attendus régénérés) ; il
+refuse, sans rien écrire, un jeu dont le résumé (repetee.json) n'est plus celui que le manifeste a noté.
 
 Format (ADR 0006, décision 2), un dossier :
 
@@ -307,6 +308,27 @@ def ecrire_manifeste(dossier, manifeste):
         json.dumps(manifeste, ensure_ascii=False, indent=1) + "\n", encoding="utf-8"
     )
     return manifeste
+
+
+def refuser_resume_retouche(dossier, manifeste):
+    """Lève Refus si le manifeste note le résumé (repetee.json) et que le fichier présent n'a plus cette taille ou cette empreinte.
+
+    Garde de la commande `manifeste` : refaire les empreintes entérinerait un résumé retouché. Un résumé
+    absent du dossier passe (deuxième des trois temps qui le refont : fichier et bloc supprimés, manifeste
+    refait, puis `resumer`), comme un manifeste qui ne le note pas.
+    """
+    fichier = Path(dossier) / REPETEE
+    fichiers = manifeste.get("fichiers")
+    notes = [f for f in fichiers if isinstance(f, dict) and f.get("chemin") == REPETEE] if isinstance(fichiers, list) else []
+    if not notes or fichier.is_symlink() or not fichier.is_file():
+        return
+    octets = fichier.read_bytes()
+    if any(f.get("octets") != len(octets) or f.get("sha256") != hashlib.sha256(octets).hexdigest() for f in notes):
+        raise Refus("%s n'a plus la taille ou l'empreinte que le manifeste a notées pour ce résumé : la commande `manifeste` "
+                    "ne refait pas un résumé, rien n'est écrit. Le restaurer depuis git avec le manifeste, ou le refaire "
+                    "(session principale, après visa) : 1) supprimer ce fichier et le bloc « repetee » du manifeste ; "
+                    "2) relancer `manifeste` ; 3) python3 tests/reference_couche_r.py resumer <relevés> --vers %s"
+                    % (fichier, dossier))
 
 
 # ---------------------------------------------------------------------------
@@ -1034,7 +1056,19 @@ def main(argv=None):
         return 0
     if args.action == "manifeste":
         dossier = Path(args.dossier)
-        ecrire_manifeste(dossier, json.loads((dossier / MANIFESTE).read_text(encoding="utf-8")))
+        try:
+            try:
+                manifeste = charger_json((dossier / MANIFESTE).read_text(encoding="utf-8"))
+            except (OSError, ValueError) as e:
+                raise Refus("%s absent ou illisible (%s : %s) : rien à refaire"
+                            % (dossier / MANIFESTE, type(e).__name__, str(getattr(e, "strerror", None) or e)[:120]))
+            if not isinstance(manifeste, dict):
+                raise Refus("%s : objet attendu, %s trouvé" % (dossier / MANIFESTE, type(manifeste).__name__))
+            refuser_resume_retouche(dossier, manifeste)
+        except Refus as e:
+            print("REFUS : %s" % e, file=sys.stderr)
+            return 2
+        ecrire_manifeste(dossier, manifeste)
         return 0
     p.print_help()
     return 2
