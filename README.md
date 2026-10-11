@@ -9,7 +9,8 @@ Ce dépôt ne contient **que ce que le projet ajoute** aux deux logiciels d'amon
 | Élément | État |
 |---|---|
 | Fonctionnement de l'ensemble (ordres, dialogue, promesses) | Éprouvé sur des parties réelles, sur la machine d'origine |
-| Logique des promesses révisée (trahison déclarée, renfort gradué, journal d'envoi) | Mesurée sur bancs et positions rejouées : tests sans pile (`bash tests/verifier.sh`) ; le 2026-10-03, 30 recherches réelles du moteur et un essai d'envoi réel ; le 2026-10-10, 160 appels à Claude sur une seule position. Aucune partie jouée contre un humain n'entre dans ces mesures. Détail et limites : `docs/doc/architecture.md` § 4 |
+| Logique des promesses révisée (trahison déclarée, renfort gradué, journal d'envoi) | Mesurée sur bancs et positions rejouées : tests sans pile (`bash tests/verifier.sh`) ; le 2026-10-03, 30 recherches réelles du moteur et un essai d'envoi réel ; le 2026-10-10, 160 appels à Claude sur une seule position, et le bruit des valeurs mesuré sur les recherches répétées d'une partie 100 % bots (110 recherches sans engagement, 21 positions) : au 99e centile il dépasse la marge exigée d'une trahison, qui, prise seule, ne protège donc que partiellement du bruit ; le cas où cette marge travaille n'est pas mesuré. Aucune partie jouée contre un humain n'entre dans ces mesures. Détail et limites : `docs/doc/architecture.md` § 4 |
+| Référence de non-régression (jeu d'essai figé de `tests/reference/`, couches D et R) | Couche D rejouée par `bash tests/verifier.sh` : 42 tables réelles, 24 770 grandeurs comparées, 0 différence. Couche R exécutée une fois sur le moteur, le 2026-10-11, sur l'image même de la capture : 210 recherches sur 21 positions, « pas de régression » ; aucun changement n'y était introduit, l'exécution ne dit rien du pouvoir de détection. Une seule partie, années 1901 à 1903 ; rien sur Claude. Détail et limites : `docs/doc/architecture.md` § 7 |
 | `install.sh` jusqu'à la préparation des amonts (clonage, patchs, configuration, dépendances PHP) | Vérifié par un essai à blanc |
 | Construction de l'image Cicero par le `Dockerfile` de ce dépôt | Validée le 2026-10-03 sur la machine d'origine : build complet depuis les sources en 20 min environ, image de 16,7 Go ; PyTorch y voit le GPU, `pydipcc`, `postman` et les protos s'importent |
 | Démarrage de la pile depuis ce dépôt, sur une base vide | Validé le 2026-10-03 : inscription d'un joueur, partie créée contre six bots, ordres soumis par les six, réponse de Claude à un message, données conservées après `arreter.sh` puis `demarrer.sh` |
@@ -73,7 +74,9 @@ docker exec -e XDEBUG_MODE=off webdiplomacy-php-fpm-1 \
 | `./demarrer.sh` | Démarre webDiplomacy, initialise Redis, démarre les conteneurs `cicero-orders` et `cicero-dialogue` |
 | `./arreter.sh` | Arrête tout ; la base et les parties sont conservées (volume Docker `webdiplomacy_webdiplomacy-db-data`) |
 | `amont/cicero/check_orders.sh <gameID>` | Affiche les ordres que chaque bot a en cache pour la phase en cours |
-| `bash tests/verifier.sh` | Batterie statique (syntaxe, patchs, absence de secret et de chemin personnel) et tests par appel direct du bot de dialogue et de la logique des promesses ; tourne sans la pile, sans GPU et sans appel à Claude |
+| `bash tests/verifier.sh` | Batterie statique (syntaxe, patchs, absence de secret et de chemin personnel, contrôle du jeu d'essai figé et des noms de fichiers du dépôt) et tests par appel direct : bot de dialogue, logique des promesses, mesure du bruit des valeurs, outillage de la référence, puis couche D de la référence de non-régression ; tourne sans la pile, sans GPU et sans appel à Claude |
+| `python3 tests/mesure/capture_reference.py commandes <gameID> --couche-r` | Imprime, sans rien lancer, les commandes d'un lot de la couche R : recherches réelles sur les 21 positions répétées, `cicero-orders` arrêté (2 h 26 estimées, 4 h 02 mesurées le 2026-10-11) ; à la main, jamais en CI |
+| `python3 tests/reference_couche_r.py comparer <relevés>` | Compare ce lot au résumé de la référence ; code 0 : pas de régression, 1 : régression, 2 : non concluant ou lot invalide |
 
 ## Organisation du dépôt
 
@@ -84,7 +87,7 @@ docker exec -e XDEBUG_MODE=off webdiplomacy-php-fpm-1 \
 | `cicero/overlay/` | Fichiers nouveaux copiés dans l'arbre Cicero : `Dockerfile`, bot de dialogue, configuration de l'agent, export du plan, engagements |
 | `webdiplomacy/patches/`, `webdiplomacy/overlay/` | Idem pour webDiplomacy |
 | `install.sh`, `demarrer.sh`, `arreter.sh` | Installation et exploitation |
-| `tests/` | Batterie statique (`verifier.sh`), banc déterministe de la logique des promesses et de l'état du bot de dialogue, sortie mesurée du banc (`mesure_promesses.py`), scripts des mesures faites sur la pile (`mesure/`) |
+| `tests/` | Batterie statique (`verifier.sh`), banc déterministe de la logique des promesses et de l'état du bot de dialogue, sortie mesurée du banc (`mesure_promesses.py`), scripts des mesures faites sur la pile (`mesure/`), jeu d'essai figé de la référence de non-régression (`reference/`, seule exception à l'exigence 4.3 : ADR 0006) et ses scripts (`reference_jeu.py`, `reference_couche_d.py`, `reference_couche_r.py`) |
 | `outils/exporter_patchs.sh` | Reporte dans le dépôt le travail fait dans `amont/` |
 | `docs/doc/architecture.md` | Fonctionnement d'ensemble ; **à lire en premier** |
 | `docs/exigences.md`, `docs/adr/`, `docs/feuille-de-route.md` | Cahier des charges, décisions, plan |
@@ -99,7 +102,7 @@ outils/exporter_patchs.sh              # régénère les patchs
 outils/exporter_patchs.sh --verifier   # échoue si le dépôt est en retard sur amont/
 ```
 
-Un fichier **nouveau** se copie à la main dans le dossier `overlay/` correspondant. Le code Cicero est copié dans l'image, non monté : toute modification demande `./install.sh` (reconstruction) puis `./demarrer.sh`.
+Un fichier **nouveau** se copie à la main dans le dossier `overlay/` correspondant. Le bytecode Python (`__pycache__`, `*.pyc`) n'est pas un fichier d'overlay : `--verifier` l'ignore, les scripts de `tests/`, lancés directement, n'en écrivent pas dans les overlays (`sys.dont_write_bytecode`), et `bash tests/verifier.sh` échoue s'il en reste dans un overlay après les tests. Le code Cicero est copié dans l'image, non monté : toute modification demande `./install.sh` (reconstruction) puis `./demarrer.sh`.
 
 Règles de contribution (branche unique, PR brouillon, visa des changements de comportement) : `CLAUDE.md`.
 

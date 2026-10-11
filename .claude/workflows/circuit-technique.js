@@ -49,6 +49,7 @@ const BATTERIES = [
 // workflow (references de non-regression, documentation de fond : regle 9)
 const ZONES_PROTEGEES = [
   'docs/doc/',
+  'tests/reference/',
   'versions.env',
 ]
 

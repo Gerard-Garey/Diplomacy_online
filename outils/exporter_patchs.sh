@@ -22,10 +22,11 @@ $DIFF -C "$W" diff --no-ext-diff -- . ':!composer.lock'             > "$TMP/w/00
 
 if [ "${1:-}" = "--verifier" ]; then
   # Les fichiers nouveaux ne passent pas par les patchs : un overlay en retard sur amont/
-  # serait écrasé par la prochaine exécution d'install.sh.
+  # serait écrasé par la prochaine exécution d'install.sh. Le bytecode Python qu'un test
+  # aurait laissé dans l'overlay n'en fait pas partie (tests/verifier.sh l'y interdit, #27).
   for paire in "cicero:$C" "webdiplomacy:$W"; do
     o="$RACINE/${paire%%:*}/overlay"; a="${paire#*:}"
-    (cd "$o" && find . -type f) | while read -r f; do
+    (cd "$o" && find . -type f -not -path '*/__pycache__/*' -not -name '*.pyc') | while read -r f; do
       cmp -s "$o/$f" "$a/$f" || { echo "Overlay en retard sur amont/ : ${paire%%:*}/overlay/${f#./}" >&2; exit 1; }
     done || exit 1
   done
