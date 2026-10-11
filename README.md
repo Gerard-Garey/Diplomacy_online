@@ -99,7 +99,7 @@ outils/exporter_patchs.sh              # régénère les patchs
 outils/exporter_patchs.sh --verifier   # échoue si le dépôt est en retard sur amont/
 ```
 
-Un fichier **nouveau** se copie à la main dans le dossier `overlay/` correspondant. Le code Cicero est copié dans l'image, non monté : toute modification demande `./install.sh` (reconstruction) puis `./demarrer.sh`.
+Un fichier **nouveau** se copie à la main dans le dossier `overlay/` correspondant. Le bytecode Python (`__pycache__`, `*.pyc`) n'est pas un fichier d'overlay : `--verifier` l'ignore, les scripts de `tests/`, lancés directement, n'en écrivent pas dans les overlays (`sys.dont_write_bytecode`), et `bash tests/verifier.sh` échoue s'il en reste dans un overlay après les tests. Le code Cicero est copié dans l'image, non monté : toute modification demande `./install.sh` (reconstruction) puis `./demarrer.sh`.
 
 Règles de contribution (branche unique, PR brouillon, visa des changements de comportement) : `CLAUDE.md`.
 
