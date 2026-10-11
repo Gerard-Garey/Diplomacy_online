@@ -736,8 +736,14 @@ def _controler_manifeste(c, manifeste, dossier, presents, tables):
     for relatif in sorted(set(listes) & set(presents)):
         octets = (dossier / relatif).read_bytes()
         if listes[relatif]["octets"] != len(octets) or listes[relatif]["sha256"] != hashlib.sha256(octets).hexdigest():
-            c.ko("fichiers", "%s %s (taille ou empreinte) : "
-                 "refaire le manifeste, par la session principale après visa" % (relatif, NE_CORRESPOND_PLUS))
+            if relatif == REPETEE:  # refaire les empreintes entérinerait un résumé retouché : il se restaure ou se refait
+                c.ko("fichiers", "%s n'a plus la taille ou l'empreinte que le manifeste a notées pour ce résumé : le "
+                     "restaurer depuis git avec le manifeste, ou refaire le résumé par `python3 "
+                     "tests/reference_couche_r.py resumer` (session principale, après visa) ; la commande `manifeste` "
+                     "ne refait pas un résumé" % relatif)
+            else:
+                c.ko("fichiers", "%s %s (taille ou empreinte) : "
+                     "refaire le manifeste, par la session principale après visa" % (relatif, NE_CORRESPOND_PLUS))
     if manifeste["taille_octets"] != sum(f["octets"] for f in listes.values() if _entier(f["octets"])):
         c.ko("taille_octets", "n'est pas la somme des tailles des fichiers listés")
 

@@ -440,6 +440,14 @@ class AvecDossiers(unittest.TestCase):
     def comparer(self, lot, *options):
         return self.lancer("comparer", lot, "--jeu", self.jeu, *options)
 
+    def retirer_le_resume(self):
+        """Les deux premiers temps que le refus de `resumer` prescrit devant un résumé déjà là."""
+        (self.jeu / reference_jeu.REPETEE).unlink()
+        manifeste = json.loads((self.jeu / "manifeste.json").read_text(encoding="utf-8"))
+        manifeste.pop("repetee")
+        reference_jeu.ecrire_json(self.jeu / "manifeste.json", manifeste)
+        self.assertEqual(reference_jeu.main(["manifeste", "--dossier", str(self.jeu)]), 0)
+
 
 class Commandes(AvecDossiers):
     def test_resumer_ecrit_le_resume_et_son_bloc(self):
@@ -470,7 +478,19 @@ class Commandes(AvecDossiers):
         self.assertEqual(self.resumer()[0], 0)
         code, sortie, erreur = self.resumer()
         self.assertEqual((code, sortie), (2, ""))
-        self.assertIn("un résumé ne s'écrit pas par-dessus un autre", erreur)
+        self.assertIn("%s existe déjà : un résumé ne s'écrit pas par-dessus un autre. Pour le refaire (session principale, "
+                      "après visa) : 1) supprimer ce fichier et le bloc « repetee » du manifeste ; 2) python3 "
+                      "tests/reference_jeu.py manifeste --dossier %s ; 3) relancer `resumer`"
+                      % (self.jeu / reference_jeu.REPETEE, self.jeu), erreur)
+        # Les trois temps que le message donne refont le résumé, à l'identique.
+        resume = (self.jeu / reference_jeu.REPETEE).read_bytes()
+        (self.jeu / reference_jeu.REPETEE).unlink()
+        manifeste = json.loads((self.jeu / "manifeste.json").read_text(encoding="utf-8"))
+        manifeste.pop("repetee")
+        reference_jeu.ecrire_json(self.jeu / "manifeste.json", manifeste)
+        self.assertEqual(reference_jeu.main(["manifeste", "--dossier", str(self.jeu)]), 0)
+        self.assertEqual(self.resumer()[0], 0)
+        self.assertEqual((self.jeu / reference_jeu.REPETEE).read_bytes(), resume)
 
     def test_resumer_refuse_des_releves_qui_ne_sont_pas_ceux_du_jeu(self):
         autres = {p: lignes_du_lot(p, valeurs=[(b + 0.01, pic, lam) for b, pic, lam in REFERENCE]) for p in PUISSANCES}
@@ -614,6 +634,122 @@ class Commandes(AvecDossiers):
         self.assertEqual(code, 2)
         self.assertIn("S1901M FRANCE (appels_export = 2)", erreur)
         self.assertIsNone(reference_jeu.lire_repetee(self.jeu))
+
+    def test_resumer_refuse_un_boost_ou_un_max_prob_divergent_hors_du_tirage_0(self):
+        # Le tirage 0 est la table figée du jeu, donc son search ; les autres lignes, A et B, n'y sont comparées que par
+        # ce contrôle. Lignes d'un fichier : A et B du tirage 0, A et B du tirage 1... Le tirage i est aux lignes 2 i et 2 i + 1.
+        manifeste = (self.jeu / "manifeste.json").read_bytes()
+        refus = "search.boost ou search.max_prob diffère de celui de la recherche A du tirage 0 pour %d recherche(s), rien n'est écrit : "
+        for nom, puissance, ligne, cle, valeur, attendu in (
+                ("boost", "FRANCE", 4, "boost", 2.0, "S1901M FRANCE, tirage 2, recherche A : search.boost = 2.0 (tirage 0 : 3.0)"),
+                ("max_prob", "ENGLAND", 8, "max_prob", 0.5,
+                 "S1901M ENGLAND, tirage 4, recherche A : search.max_prob = 0.5 (tirage 0 : 0.4)"),
+                # Une recherche B n'entre pas dans le résumé, mais `comparer` juge son search : la référence doit passer le sien.
+                ("b", "FRANCE", 5, "boost", 2.0, "S1901M FRANCE, tirage 2, recherche B : search.boost = 2.0 (tirage 0 : 3.0)"),
+                ("b0", "ENGLAND", 1, "max_prob", 0.5,
+                 "S1901M ENGLAND, tirage 0, recherche B : search.max_prob = 0.5 (tirage 0 : 0.4)")):
+            par_puissance = {p: self.lignes(self.releves, p) for p in PUISSANCES}
+            self.assertEqual((par_puissance[puissance][ligne]["recherche"], par_puissance[puissance][ligne]["tirage"]),
+                             ("AB"[ligne % 2], ligne // 2))
+            par_puissance[puissance][ligne]["entree"]["search"][cle] = valeur
+            code, sortie, erreur = self.resumer(self.ecrire(nom, par_puissance))
+            self.assertEqual((code, sortie), (2, ""), erreur)
+            self.assertIn(refus % 1 + attendu + "\n", erreur)
+            self.assertIsNone(reference_jeu.lire_repetee(self.jeu))
+            self.assertEqual((self.jeu / "manifeste.json").read_bytes(), manifeste)
+        # Les deux grandeurs d'une même ligne, deux positions, A et B : trois recherches, quatre grandeurs nommées, dans
+        # l'ordre de la partie puis du fichier. Une ligne B sans bloc search est divergente sur les deux grandeurs.
+        par_puissance = {p: self.lignes(self.releves, p) for p in PUISSANCES}
+        par_puissance["FRANCE"][2]["entree"]["search"].update(boost=2.0, max_prob=0.5)
+        par_puissance["ENGLAND"][6]["entree"]["search"]["boost"] = None
+        del par_puissance["ENGLAND"][9]["entree"]["search"]
+        code, _sortie, erreur = self.resumer(self.ecrire("trois", par_puissance))
+        self.assertEqual(code, 2)
+        self.assertIn(refus % 3 + "S1901M ENGLAND, tirage 3, recherche A : search.boost = None (tirage 0 : 3.0) ; "
+                      "S1901M ENGLAND, tirage 4, recherche B : search.boost = None (tirage 0 : 3.0) ; "
+                      "S1901M ENGLAND, tirage 4, recherche B : search.max_prob = None (tirage 0 : 0.4) ; "
+                      "S1901M FRANCE, tirage 1, recherche A : search.boost = 2.0 (tirage 0 : 3.0) ; "
+                      "S1901M FRANCE, tirage 1, recherche A : search.max_prob = 0.5 (tirage 0 : 0.4)\n", erreur)
+        self.assertIsNone(reference_jeu.lire_repetee(self.jeu))
+        self.assertEqual((self.jeu / "manifeste.json").read_bytes(), manifeste)
+        # Le tirage 0 lui-même reste jugé contre la table figée du jeu, search compris.
+        par_puissance = {p: self.lignes(self.releves, p) for p in PUISSANCES}
+        par_puissance["FRANCE"][0]["entree"]["search"]["boost"] = 2.0
+        code, _sortie, erreur = self.resumer(self.ecrire("zero", par_puissance))
+        self.assertEqual(code, 2)
+        self.assertIn("n'est pas la table figée du jeu pour 1 position(s) sur 2 (S1901M FRANCE)", erreur)
+
+    def test_resumer_refuse_un_lot_sans_tirage_0(self):
+        # Les tirages 1 à 4 de FRANCE, le tirage 1 portant la table figée du jeu : la première recherche A lue est bien
+        # cette table, mais ce n'est pas le tirage 0.
+        manifeste = (self.jeu / "manifeste.json").read_bytes()
+        par_puissance = {p: self.lignes(self.releves, p) for p in PUISSANCES}
+        for ligne in par_puissance["FRANCE"]:
+            ligne["tirage"] += 1
+        self.assertEqual(sorted({ligne["tirage"] for ligne in par_puissance["FRANCE"]}), [1, 2, 3, 4, 5])
+        code, sortie, erreur = self.resumer(self.ecrire("sans_zero", par_puissance))
+        self.assertEqual((code, sortie), (2, ""))
+        self.assertIn("la recherche A du tirage 0 n'est pas la table figée du jeu pour 1 position(s) sur 2 (S1901M FRANCE : pas "
+                      "de tirage 0, le premier lu est le tirage 1) : ces relevés ne sont pas ceux de la référence", erreur)
+        self.assertIsNone(reference_jeu.lire_repetee(self.jeu))
+        self.assertEqual((self.jeu / "manifeste.json").read_bytes(), manifeste)
+        # Le contrôle des recherches nomme le tirage auquel il compare, quel que soit son numéro.
+        positions, _lecture = couche_r.lire_lot(self.racine / "sans_zero", order_loc())
+        positions[("S1901M", "FRANCE")]["recherches"][3] = {"lambda": 0.01, "boost": 2.0, "max_prob": 0.4}
+        self.assertEqual(couche_r.divergences_de_recherche(positions, [("S1901M", "ENGLAND"), ("S1901M", "FRANCE")]), (
+            1, ["S1901M FRANCE, tirage 2, recherche B : search.boost = 2.0 (tirage 1 : 3.0)"]))
+
+    def test_resumer_sans_numero_de_tirage(self):
+        # Relevés sans champ `tirage` : le rang en tient lieu, la première recherche A lue est le tirage 0. Le résumé
+        # est celui des relevés numérotés ; un refus nomme alors le « premier tirage » et le rang de la ligne.
+        self.assertEqual(self.resumer()[0], 0)
+        resume = (self.jeu / reference_jeu.REPETEE).read_bytes()
+        self.retirer_le_resume()
+        par_puissance = {p: self.lignes(self.releves, p) for p in PUISSANCES}
+        for lignes in par_puissance.values():
+            for ligne in lignes:
+                del ligne["tirage"]
+        code, _sortie, erreur = self.resumer(self.ecrire("sans_numero", par_puissance))
+        self.assertEqual((code, erreur), (0, ""))
+        self.assertEqual((self.jeu / reference_jeu.REPETEE).read_bytes(), resume)
+        self.assertEqual(self.comparer(self.racine / "sans_numero")[0], 0)
+        self.retirer_le_resume()
+        par_puissance["FRANCE"][5]["entree"]["search"]["boost"] = 2.0
+        code, _sortie, erreur = self.resumer(self.ecrire("sans_numero_b", par_puissance))
+        self.assertEqual(code, 2)
+        self.assertIn("diffère de celui de la recherche A du premier tirage pour 1 recherche(s), rien n'est écrit : "
+                      "S1901M FRANCE, tirage 2, recherche B : search.boost = 2.0 (premier tirage : 3.0)\n", erreur)
+
+    def test_un_lot_accepte_par_resumer_passe_son_propre_comparer(self):
+        # L'invariant que le contrôle des recherches protège : `comparer` juge le search de chaque ligne, A et B, contre
+        # celui du résumé ; un lot que `resumer` accepte rend donc 0 contre le résumé qu'il vient d'écrire.
+        lots = {
+            "tel_quel": {p: lignes_du_lot(p) for p in PUISSANCES},
+            "sans_b": {p: lignes_du_lot(p, avec_b=False) for p in PUISSANCES},
+            "trois_tirages": {p: lignes_du_lot(p, REFERENCE[:3]) for p in PUISSANCES},
+            "b_decalees": {p: lignes_du_lot(p) for p in PUISSANCES},
+        }
+        # Des recherches B aux valeurs et au lambda tout autres : seule leur structure est jugée.
+        for lignes in lots["b_decalees"].values():
+            for ligne, (bur, pic, lam) in zip(lignes[1::2], REFERENCE):
+                self.assertEqual(ligne["recherche"], "B")
+                ligne["entree"] = table(bur - 0.02, pic + 0.03, lam * 2)
+        for nom in sorted(lots):
+            lot = self.ecrire(nom, lots[nom])
+            code, _sortie, erreur = self.resumer(lot)
+            self.assertEqual((code, erreur), (0, ""), nom)
+            code, sortie, erreur = self.comparer(lot)
+            self.assertEqual((code, erreur), (0, ""), nom)
+            self.assertIn("Décision : PAS DE RÉGRESSION", sortie)
+            self.retirer_le_resume()
+        # La contraposée, sur le lot que `resumer` refuse : contre le résumé du lot sain, sa recherche B à boost 2 fait
+        # une régression. Sans le refus, la référence échouerait à son propre `comparer`.
+        self.assertEqual(self.resumer()[0], 0)
+        par_puissance = {p: self.lignes(self.releves, p) for p in PUISSANCES}
+        par_puissance["FRANCE"][5]["entree"]["search"]["boost"] = 2.0
+        code, sortie, _erreur = self.comparer(self.ecrire("b", par_puissance))
+        self.assertEqual(code, 1)
+        self.assertIn("search.boost = 2.0 (référence : 3.0)", sortie)
 
     def test_un_fichier_ecarte_n_est_pas_lu(self):
         # --sauf et --seulement s'appliquent avant la lecture : un relevé illisible qu'ils écartent ne gêne pas.
@@ -762,8 +898,15 @@ class ControleDuJeu(AvecDossiers):
         fichier = self.jeu / reference_jeu.REPETEE
         fichier.write_text(fichier.read_text(encoding="utf-8").replace('"n":5', '"n":4'), encoding="utf-8")
         violations = reference_jeu.controler(self.jeu)
-        self.assertEqual(len(violations), 1)
-        self.assertIn("repetee.json %s" % reference_jeu.NE_CORRESPOND_PLUS, violations[0])
+        self.assertEqual(violations, [
+            "manifeste.json : fichiers : repetee.json n'a plus la taille ou l'empreinte que le manifeste a notées pour ce "
+            "résumé : le restaurer depuis git avec le manifeste, ou refaire le résumé par `python3 "
+            "tests/reference_couche_r.py resumer` (session principale, après visa) ; la commande `manifeste` ne refait pas "
+            "un résumé"])
+        self.assertNotIn("refaire le manifeste", violations[0])
+        # Ce que le message écarte : la commande `manifeste` referait les empreintes, et le résumé retouché passerait.
+        self.assertEqual(reference_jeu.main(["manifeste", "--dossier", str(self.jeu)]), 0)
+        self.assertEqual(reference_jeu.controler(self.jeu), [])
 
     def test_generer_ne_conseille_pas_d_enteriner_un_resume_retouche(self):
         # Le refus de --generer (couche D) devant une violation portée par le résumé : le restaurer ou le refaire
