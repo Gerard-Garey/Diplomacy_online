@@ -45,14 +45,16 @@ PUISSANCES = ("ENGLAND", "FRANCE", "TURKEY")
 MESSAGE = "Hello, what are your plans for this turn?"
 
 
-def releves_fabriques(dossier, graine=31):
+def releves_fabriques(dossier, graine=31, engagements=False):
     """Relevés fabriqués, au format de rejeu_moteur.py, clés exclues comprises ; rend (lignes, historique).
 
     Par position : huit à seize actions des trois unités du banc, valeurs de 0 à
     0,30 à cinq décimales (à deux, l'arrondi du gain ne se verrait pas), probabilités tirées puis normalisées, la dernière action à 1e-5 (sous
-    tout plancher essayé) ; classement et export par les fonctions du dépôt. Une
-    table sur deux vient d'une recherche avec engagement : la probabilité
-    d'`action_values` y est renforcée, celle de `prior_policy` ne l'est pas.
+    tout plancher essayé) ; classement et export par les fonctions du dépôt. Les
+    recherches sont sans engagement, comme les recherches A du jeu versionné : le
+    contrôle n'admet qu'elles (I3, #40). `engagements` : une table sur deux vient
+    d'une recherche avec engagement -- la probabilité d'`action_values` y est
+    renforcée, celle de `prior_policy` ne l'est pas -- pour le test de ce refus.
     """
     tirage = random.Random(graine)
     toutes = list(itertools.product(*banc.ORDRES_LEGAUX.values()))
@@ -66,7 +68,7 @@ def releves_fabriques(dossier, graine=31):
         ]
         table[-1] = (table[-1][0], table[-1][1], 1e-5)
         regularize_lambda = tirage.choice((0.01, 0.1))
-        promesses = [table[1][0][0]] if numero % 2 else []
+        promesses = [table[1][0][0]] if engagements and numero % 2 else []
         action_values, avant = banc.classer(table, regularize_lambda, promesses)
         recherche = dict(banc.RECHERCHE, **{"lambda": regularize_lambda})
         entree = banc.exporter(action_values, dossier, avant, recherche)
@@ -983,6 +985,127 @@ class Controle(AvecJeu):
         self.une_violation("historique.json", "JSON illisible")
 
 
+class Coherence(AvecJeu):
+    """I1 à I3 (#40) : trois liens entre les arguments bruts d'export_plans, que la couche D ne rejoue pas.
+
+    Chaque retouche est suivie de la commande `manifeste` (empreintes refaites) : seul le contenu est jugé.
+    Les retouches sont celles du critère d'acceptation de l'issue ; elles sont rejouées sur une copie du jeu
+    versionné par des essais en ligne de commande, hors batterie."""
+
+    FICHIER, ICI = "tables/S1901M.json", "tables.FRANCE.export_plans"
+
+    def retoucher(self, changement):
+        """Applique `changement` aux arguments bruts de S1901M FRANCE, refait le manifeste ; rend les violations."""
+        self.modifier(self.FICHIER, lambda d: changement(d["tables"]["FRANCE"]["export_plans"]))
+        return self.violations()
+
+    def invariants(self, violations):
+        """Les invariants que nomment les violations, toutes portées par la table retouchée."""
+        for violation in violations:
+            self.assertTrue(violation.startswith("%s : %s." % (self.FICHIER, self.ICI)), violation)
+        return sorted({violation.split(" : ")[2] for violation in violations})
+
+    def test_le_jeu_fabrique_passe_et_ses_scores_sont_ceux_de_la_formule(self):
+        self.assertEqual(self.violations(), [])
+        arguments = self.table()["export_plans"]
+        self.assertEqual(len(arguments["action_values"]), 11)
+        self.assertEqual(len(arguments["prior_policy"]), 11)
+        self.assertEqual((reference_jeu.TOLERANCE_SCORE, reference_jeu.PLANCHER_PROB_SCORE), (1e-12, 1e-6))
+
+    def test_i1_score_plus_0_5(self):
+        violations = self.retoucher(lambda e: e["action_values"][0].update(score=e["action_values"][0]["score"] + 0.5))
+        self.assertEqual(len(violations), 1, violations)
+        self.une_violation(self.FICHIER, self.ICI + ".action_values[0].score", "I1", "écart 0.5, tolérance 1e-12")
+
+    def test_i1_tous_les_scores_a_zero(self):
+        def a_zero(e):
+            for action in e["action_values"]:
+                action["score"] = 0.0
+
+        violations = self.retoucher(a_zero)
+        # Des scores tous égaux ne croissent pas : I2 passe, I1 refuse chacune des onze actions.
+        self.assertEqual((len(violations), self.invariants(violations)), (11, ["I1"]))
+
+    def test_i1_et_i2_scores_inverses_dans_l_ordre_de_la_liste(self):
+        def inverser(e):
+            scores = [action["score"] for action in e["action_values"]]
+            for action, score in zip(e["action_values"], reversed(scores)):
+                action["score"] = score
+
+        violations = self.retoucher(inverser)
+        self.assertEqual(self.invariants(violations), ["I1", "I2"])
+        # Onze scores distincts : chacun, sauf le premier, dépasse le précédent ; celui du milieu garde sa place.
+        self.assertEqual(sum(" : I2 : " in v for v in violations), 10)
+        self.assertEqual(sum(" : I1 : " in v for v in violations), 10)
+        self.une_violation(self.ICI + ".action_values[1].score", "I2", "dépasse le score de l'action précédente")
+
+    def test_i1_et_i3_probabilite_d_une_action_fois_0_5(self):
+        violations = self.retoucher(lambda e: e["action_values"][3].update(prob=e["action_values"][3]["prob"] * 0.5))
+        self.assertEqual((len(violations), self.invariants(violations)), (2, ["I1", "I3"]))
+        self.une_violation(self.ICI + ".action_values[3].score", "I1")
+        self.une_violation(self.ICI + ".action_values[3].prob", "I3", "n'est pas la probabilité de prior_policy[")
+
+    def test_i1_residu_d_une_valeur_sous_l_arrondi_de_l_export(self):
+        violations = self.retoucher(lambda e: e["action_values"][3].update(value=e["action_values"][3]["value"] + 1e-7))
+        self.assertEqual((len(violations), self.invariants(violations)), (1, ["I1"]))
+        self.une_violation(self.ICI + ".action_values[3].score", "I1", "écart 1e-07")
+
+    def test_i1_tolerance(self):
+        score = self.table()["export_plans"]["action_values"][5]["score"]
+        self.assertEqual(self.retoucher(lambda e: e["action_values"][5].update(score=score + 5e-13)), [])
+        self.assertEqual(self.invariants(self.retoucher(lambda e: e["action_values"][5].update(score=score + 2e-12))), ["I1"])
+
+    def test_i3_residu_d_une_probabilite_de_la_politique_d_avant(self):
+        rang = self.table()["export_plans"]["prior_policy"][-1]["action"]
+        violations = self.retoucher(lambda e: e["prior_policy"][-1].update(prob=e["prior_policy"][-1]["prob"] * 1.0000001))
+        self.assertEqual((len(violations), self.invariants(violations)), (1, ["I3"]))
+        # Le refus dit sa portée : l'égalité est celle d'une recherche sans engagement.
+        self.une_violation("%s.action_values[%d].prob" % (self.ICI, rang), "I3", "prior_policy[10]",
+                           "ne vaut que pour une table de recherche sans engagement (recherche A)")
+
+    def test_i3_action_que_la_politique_d_avant_ne_designe_plus(self):
+        rang = self.table()["export_plans"]["prior_policy"][-1]["action"]
+        violations = self.retoucher(lambda e: e["prior_policy"].pop())
+        self.assertEqual((len(violations), self.invariants(violations)), (1, ["I3"]))
+        self.une_violation("%s.action_values[%d].prob" % (self.ICI, rang), "aucune ligne de prior_policy ne désigne cette action")
+
+    def test_i3_refuse_un_jeu_de_recherches_avec_engagement(self):
+        # Une table sur deux vient d'une recherche avec engagement : le renfort y a déplacé la probabilité
+        # d'action_values, celle de prior_policy est d'avant renfort. Le jeu est refusé à l'écriture (reduire).
+        lignes, historique = releves_fabriques(self.racine / "avec_engagement", engagements=True)
+        releves = self.racine / "avec_engagement.jsonl"
+        releves.write_text("".join(json.dumps(ligne) + "\n" for ligne in lignes), encoding="utf-8")
+        tables, _ = reference_jeu.reduire_fichiers([releves])
+        with self.assertRaises(reference_jeu.Refus) as refus:
+            reference_jeu.construire_jeu(self.racine / "jeu_avec_engagement", historique, tables, MANIFESTE)
+        violations = str(refus.exception).split("\n  ")[1:]
+        self.assertTrue(violations and all(" : I3 : " in v and reference_jeu.SANS_ENGAGEMENT in v for v in violations), violations)
+        # Les trois tables de rang impair (S1901M FRANCE, F1901M ENGLAND et TURKEY), et elles seules.
+        self.assertEqual(sorted({" ".join(v.split(".export_plans")[0].split(" : ")) for v in violations}),
+                         ["tables/F1901M.json tables.ENGLAND", "tables/F1901M.json tables.TURKEY", "tables/S1901M.json tables.FRANCE"])
+
+    def test_des_arguments_mal_formes_ne_sont_pas_juges_sur_leur_coherence(self):
+        # Une forme que le contrôle refuse déjà : sa violation, et ni trace ni I1 calculé sur une chaîne.
+        violations = self.retoucher(lambda e: e["action_values"][0].update(prob="0.5"))
+        self.assertEqual(len(violations), 1, violations)
+        self.une_violation(self.ICI + ".action_values[0].prob", "nombre fini attendu")
+
+    def test_i3_rang_hors_bornes(self):
+        # Le rang ne désigne plus rien : l'action qu'il désignait n'a plus de ligne. Pas d'IndexError.
+        rang = self.table()["export_plans"]["prior_policy"][0]["action"]
+        violations = self.retoucher(lambda e: e["prior_policy"][0].update(action=99))
+        self.assertEqual((len(violations), self.invariants(violations)), (1, ["I3"]))
+        self.une_violation("%s.action_values[%d].prob" % (self.ICI, rang), "aucune ligne de prior_policy")
+
+    def test_generer_refuse_une_table_incoherente(self):
+        self.retoucher(lambda e: e["action_values"][0].update(score=e["action_values"][0]["score"] + 0.5))
+        avant = {f: (self.dossier / f).read_bytes() for f in reference_jeu.fichiers_du_jeu(self.dossier)}
+        code, sortie = self.generer()
+        self.assertEqual(code, 2, sortie)
+        self.assertIn("export_plans.action_values[0].score : I1", sortie)
+        self.assertEqual({f: (self.dossier / f).read_bytes() for f in reference_jeu.fichiers_du_jeu(self.dossier)}, avant)
+
+
 class Emplacement(AvecJeu):
     """Emplacement unique : une table de recherche hors de tests/reference/ est refusée."""
 
@@ -1768,16 +1891,29 @@ class Mutations(AvecJeu):
         return {couche: n for couche, n in couche_d.par_couche(lignes).items() if n}
 
     def vue_par(self, nom, *couches, seules=False):
-        """La mutation change des grandeurs de chacune de ces couches (et d'aucune autre si `seules`) ; jamais D6."""
+        """La mutation change des grandeurs de chacune de ces couches (et d'aucune autre si `seules`) ; D6 n'est
+        changée que par celle qui la vise."""
         decompte = self.decompte(nom)
         for couche in couches:
             self.assertIn(couche, decompte, decompte)
         if seules:
             self.assertEqual(sorted(decompte), sorted(couches), decompte)
-        self.assertNotIn("D6", decompte)
+        if "D6" not in couches:
+            self.assertNotIn("D6", decompte)
 
-    def test_sept_mutations(self):
-        self.assertEqual(len(couche_d.MUTATIONS), 7)
+    def test_huit_mutations(self):
+        self.assertEqual(len(couche_d.MUTATIONS), 8)
+        self.assertEqual(len({mutation[0] for mutation in couche_d.MUTATIONS}), 8)
+
+    def test_verdict_du_registre(self):
+        # La seule mutation qui vise D6 (#40), et elle ne change rien d'autre.
+        self.vue_par("verdict du registre", "D6", seules=True)
+        self.assertEqual([m[0] for m in couche_d.MUTATIONS if "D6" in self.decompte(m[0])],
+                         ["verdict du registre : tenue dès que l'unité a reçu un ordre"])
+
+    def test_le_texte_de_la_mutation_du_verdict_est_celui_du_bot(self):
+        ancien = next(m[2] for m in couche_d.MUTATIONS if m[0].startswith("verdict du registre"))
+        self.assertEqual(couche_d.FICHIERS["bot"].read_text(encoding="utf-8").count(ancien), 1)
 
     def test_marge(self):
         self.vue_par("marge", "D3", "D4")
@@ -1804,7 +1940,10 @@ class Mutations(AvecJeu):
         code, sortie = self.lancer("--mutations")
         self.assertEqual(code, 0, sortie)
         self.assertIn("Sans mutation : 0 différence(s)", sortie)
-        self.assertEqual(sortie.count("| oui"), 7)
+        self.assertEqual(sortie.count("| oui"), 8)
+        # Colonnes : nom, D1, D1r, D2, D3, D4, D5, D6, total, vue. Une seule ligne a une colonne D6 non nulle.
+        lignes = [ligne.split(" | ") for ligne in sortie.splitlines() if ligne.endswith("| oui")]
+        self.assertEqual([ligne[0] for ligne in lignes if ligne[7] != "0"], ["verdict du registre : tenue dès que l'unité a reçu un ordre"])
 
     def test_la_commande_rend_1_si_une_mutation_n_est_pas_vue(self):
         sans_effet = (("sans effet", "bot", "MAX_SEND_ATTEMPTS = 3\n", "MAX_SEND_ATTEMPTS = 4\n"),)
@@ -2954,12 +3093,31 @@ class EssaiASec(unittest.TestCase):
         self.assertIn("renfort non composé B -> C : probabilités égales : True ; croissantes : False", sortie)
 
 
-# Planchers du jeu d'essai versionné (tests/reference/, posé le 2026-10-10 et résumé le 2026-10-11). Le jeu peut
-# grandir ; il ne peut pas s'amenuiser ni disparaître sans que cette constante change, dans le même commit, après visa.
+# Contenu du jeu d'essai versionné (tests/reference/, posé le 2026-10-10 et résumé le 2026-10-11). Le test exige
+# l'égalité sur tout ce qui suit, sauf le nombre de grandeurs de la couche D, seul plancher (une grandeur peut
+# s'ajouter) : le jeu ne peut ni grandir, ni s'amenuiser, ni disparaître sans qu'une de ces constantes change,
+# dans le même commit, après visa.
 PHASES_DU_JEU = ("S1901M", "F1901M", "S1902M", "F1902M", "S1903M", "F1903M")
 TABLES_DU_JEU = 42  # 6 phases x 7 puissances
 POSITIONS_REPETEES_DU_JEU = 21
 GRANDEURS_DU_JEU = 24770  # comparées par la couche D
+# Ce qu'aucune couche ne rejoue (#40), remesuré le 2026-10-11 sur tests/reference/. Le résumé : un ordre ou une
+# tête qui en sort ne change aucune grandeur jugée. L'historique : la couche D ne lit que les ordres des phases de
+# mouvement (D6) ; les quatre premières phases hors mouvement servent au rejeu des positions sur le moteur
+# (couche R, hors batterie) et W1903A n'est lue par rien. Leurs ordres sont donc écrits ici en clair, 21 ordres
+# (11 + 2 + 3 + 1 + 4). Ces constantes ne jugent que le jeu du dépôt : sur une copie, rien ne garde ces ordres.
+ORDRES_RESUMES_DU_JEU = 328  # clés d'`order_values` du résumé, sur les 21 positions
+TETES_RESUMEES_DU_JEU = 28
+PHASES_DE_L_HISTORIQUE = ("S1901M", "F1901M", "W1901A", "S1902M", "F1902M", "F1902R", "W1902A", "S1903M", "S1903R",
+                          "F1903M", "W1903A")
+ORDRES_HORS_MOUVEMENT = {
+    "W1901A": {"AUSTRIA": ["A VIE B", "A BUD B"], "ENGLAND": ["F LON B"], "FRANCE": ["F BRE B", "A PAR B", "F MAR B"],
+               "GERMANY": ["F KIE B", "A BER B"], "ITALY": ["F NAP B"], "RUSSIA": ["A WAR B"], "TURKEY": ["A SMY B"]},
+    "F1902R": {"RUSSIA": ["F SEV D"], "TURKEY": ["A BUL D"]},
+    "W1902A": {"AUSTRIA": ["F TRI B"], "ENGLAND": ["A LON B"], "TURKEY": ["F SMY B"]},
+    "S1903R": {"RUSSIA": ["F BAL R BOT"]},
+    "W1903A": {"ENGLAND": ["A EDI B"], "FRANCE": ["A PAR B"], "GERMANY": ["A SIL D"], "ITALY": ["F ION D"]},
+}
 
 
 class JeuDuDepot(unittest.TestCase):
@@ -2985,12 +3143,37 @@ class JeuDuDepot(unittest.TestCase):
         self.assertEqual(sans_attendus, [])
         self.assertGreaterEqual(grandeurs, GRANDEURS_DU_JEU)
 
+    def test_contenu_du_resume_versionne(self):
+        resume = reference_jeu.lire_repetee(reference_jeu.DOSSIER)
+        self.assertIsNotNone(resume, "%s absent : le résumé des positions répétées (couche R) est exigé" % reference_jeu.REPETEE)
+        resumes = [r for par_puissance in resume["positions"].values() for r in par_puissance.values()]
+        self.assertEqual(len(resumes), POSITIONS_REPETEES_DU_JEU)
+        self.assertEqual(sum(len(r["order_values"]) for r in resumes), ORDRES_RESUMES_DU_JEU)
+        self.assertEqual(sum(len(r["tetes"]) for r in resumes), TETES_RESUMEES_DU_JEU)
+
+    def test_historique_versionne(self):
+        phases = reference_jeu.lire_jeu(reference_jeu.DOSSIER)["historique"]["phases"]
+        self.assertEqual(tuple(phase["name"] for phase in phases), PHASES_DE_L_HISTORIQUE)
+        hors_mouvement = {phase["name"]: phase["orders"] for phase in phases if not phase["name"].endswith("M")}
+        self.assertEqual(hors_mouvement, ORDRES_HORS_MOUVEMENT)
+        self.assertEqual({phase: sum(len(ordres) for ordres in par_puissance.values()) for phase, par_puissance in hors_mouvement.items()},
+                         {"W1901A": 11, "F1902R": 2, "W1902A": 3, "S1903R": 1, "W1903A": 4})
+
+    def test_les_tables_versionnees_sont_coherentes(self):
+        # I1 à I3 (#40), remesurés sur le jeu du dépôt : 42 tables, 628 actions, écart de I1 nul avec math.log,
+        # aucune table non triée, 628 probabilités égales à celles de prior_policy.
+        self.assertEqual([v for v in reference_jeu.controler(reference_jeu.DOSSIER) if " : I" in v], [])
+        jeu = reference_jeu.lire_jeu(reference_jeu.DOSSIER)
+        arguments = [table["export_plans"] for tables in jeu["tables"].values() for table in tables.values()]
+        self.assertEqual((len(arguments), sum(len(a["action_values"]) for a in arguments)), (TABLES_DU_JEU, 628))
+        self.assertEqual(sum(len(a["prior_policy"]) for a in arguments), 628)
+
 
 class Hygiene(unittest.TestCase):
     def test_bytecode_interdit_dans_les_scripts_nouveaux(self):
         tests = Path(__file__).resolve().parent
         for script in (tests / "reference_jeu.py", tests / "reference_couche_d.py", Path(__file__),
-                       tests / "mesure" / "capture_reference.py"):
+                       tests / "mesure" / "capture_reference.py", tests / "echecs_attendus.py"):
             self.assertIn("sys.dont_write_bytecode = True", script.read_text(encoding="utf-8"), script.name)
 
 

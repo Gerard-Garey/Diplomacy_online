@@ -22,7 +22,8 @@ répétée porte plusieurs relevés de cette position (ses tirages, recherches A
 dossier vaut ses m1_*.jsonl). Seul le refus du contrôle final de `construire_jeu` (le jeu écrit ne passe pas
 `controler`), code 2 lui aussi, laisse dans --vers les fichiers écrits, pour être lus. `manifeste` refait la liste des
 fichiers et les tailles d'un jeu dont les fichiers ont changé (attendus régénérés) ; il
-refuse, sans rien écrire, un jeu dont le résumé (repetee.json) n'est plus celui que le manifeste a noté.
+refuse, sans rien écrire, un jeu dont le résumé (repetee.json) n'est plus celui que le manifeste a noté,
+ou que le manifeste ne note plus alors qu'il en porte le bloc.
 
 Format (ADR 0006, décision 2), un dossier :
 
@@ -41,6 +42,12 @@ prob, score, et `orders` quand ce ne sont pas ceux du candidat de même rang),
 `prior_policy` (prob, et `action` -- le rang de l'action dans `action_values` -- ou
 `orders` si elle n'y est pas), `regularize_lambda`, `boost`,
 `max_prob`. Les attendus sont ceux de tests/reference_couche_d.py.
+
+Ces arguments bruts sont liés entre eux, et le contrôle le vérifie sur chaque table qui les porte (#40 :
+la couche D ne lit ni le score, ni la probabilité d'`action_values`, ni ce qu'une valeur ou une probabilité
+garde sous l'arrondi de l'export) : le score est value + regularize_lambda x ln(max(prob, 1e-6)) (I1), les
+scores ne croissent pas le long de la liste (I2), et la probabilité d'une action est celle de sa ligne de
+`prior_policy` (I3). I3 ne vaut que sans engagement : le jeu ne reçoit que des tables de recherches A.
 
 <résumé> (tests/reference_couche_r.py, qui l'écrit et le lit ; ADR 0006, décision 2 : des
 grandeurs résumées et leurs tolérances, jamais les recherches brutes) : `n` tirages ;
@@ -88,6 +95,9 @@ LONGUEUR_ORDRE_MAX = 24
 NOMS_D_ETAT = ("current_plans", "pseudo_commitments", "claude_dialogue_state")
 # Ce que le contrôle du manifeste dit d'un fichier retouché : tests/reference_couche_d.py (--generer) le relit.
 NE_CORRESPOND_PLUS = "ne correspond plus au manifeste"
+# Ce que le refus de I3 dit de sa portée (#40) : l'égalité est celle d'une recherche sans engagement.
+SANS_ENGAGEMENT = ("L'égalité ne vaut que pour une table de recherche sans engagement (recherche A) : avec engagement, "
+                   "le renfort déplace la probabilité d'action_values, et une telle table n'entre pas dans le jeu")
 # Listes fermées, mesurées sur les 106 fichiers du dépôt le 2026-10-10. Une extension ou un nom nouveau
 # s'ajoute ici, dans le commit qui introduit le fichier : la ligne se voit dans le diff.
 EXTENSIONS_ADMISES = (
@@ -120,6 +130,15 @@ SHA256 = re.compile(r"[0-9a-f]{64}")
 IMAGE = re.compile(r"[A-Za-z0-9_.:/@-]{1,100}")
 LONGUEUR_COMMANDE_MAX = 400
 ENTIER_MAX = 2 ** 53  # au-delà, un entier JSON n'est plus un nombre que le format connaît
+# Cohérence des arguments bruts d'export_plans (#40). Le score d'une action est celui que la recherche calcule,
+# amont Cicero au commit épinglé par versions.env (e85afeddb34f5b7c1ea0827203b425a0f7e68ead),
+# fairdiplomacy/agents/br_corr_bilateral_search.py:339 :
+#     pice_value = value + regularize_lambda * np.log(max(prob, 1e-6))
+# puis la liste est triée par score décroissant (:342). Mesuré sur les 42 tables du jeu versionné (628 actions),
+# avec math.log : écart nul. La tolérance couvre un écart d'arrondi entre np.log et math.log d'une machine à
+# l'autre (prudence, non mesurée) ; elle est absolue, les scores étant de l'ordre de l'unité.
+PLANCHER_PROB_SCORE = 1e-6
+TOLERANCE_SCORE = 1e-12
 
 CLES_TABLE = ("plans", "order_values", "candidates", "search")
 CLES_PLAN = ("rank", "orders", "value", "cost_vs_best")
@@ -321,16 +340,29 @@ def ecrire_manifeste(dossier, manifeste):
 
 
 def refuser_resume_retouche(dossier, manifeste):
-    """Lève Refus si le manifeste note le résumé (repetee.json) et que le fichier présent n'a plus cette taille ou cette empreinte.
+    """Lève Refus si le résumé (repetee.json) présent n'est pas celui que le manifeste a noté, taille et empreinte.
 
-    Garde de la commande `manifeste` : refaire les empreintes entérinerait un résumé retouché. Un résumé
-    absent du dossier passe (deuxième des trois temps qui le refont : fichier et bloc supprimés, manifeste
-    refait, puis `resumer`), comme un manifeste qui ne le note pas.
+    Garde de la commande `manifeste` : refaire les empreintes entérinerait un résumé retouché. Deux cas : le
+    manifeste note le fichier et le fichier présent a une autre taille ou une autre empreinte ; le manifeste
+    ne le note plus mais porte le bloc « repetee » (#40 : le résumé sorti du dossier, `manifeste`, le résumé
+    retouché remis, `manifeste` -- au second appel, rien ne dit plus que le fichier est celui que le bloc décrit).
+    Un résumé absent du dossier passe (deuxième des trois temps qui le refont : fichier et bloc supprimés,
+    manifeste refait, puis `resumer`), comme un fichier que le manifeste ne note pas et dont il n'a pas le bloc
+    (le contrôle, lui, refuse ce résumé sans bloc).
     """
     fichier = Path(dossier) / REPETEE
     fichiers = manifeste.get("fichiers")
     notes = [f for f in fichiers if isinstance(f, dict) and f.get("chemin") == REPETEE] if isinstance(fichiers, list) else []
-    if not notes or fichier.is_symlink() or not fichier.is_file():
+    if fichier.is_symlink() or not fichier.is_file():
+        return
+    if not notes:
+        if "repetee" in manifeste:
+            raise Refus("%s est dans le dossier et le manifeste en porte le bloc « repetee », mais ne note plus ce fichier "
+                        "(ni taille ni empreinte) : rien ne dit que c'est le résumé que ce bloc décrit, la commande "
+                        "`manifeste` ne l'entérine pas, rien n'est écrit. Restaurer le manifeste et le résumé depuis git, "
+                        "ou refaire le résumé (session principale, après visa) : 1) supprimer ce fichier et le bloc "
+                        "« repetee » du manifeste ; 2) relancer `manifeste` ; 3) python3 tests/reference_couche_r.py "
+                        "resumer <relevés> --vers %s" % (fichier, dossier))
         return
     octets = fichier.read_bytes()
     if any(f.get("octets") != len(octets) or f.get("sha256") != hashlib.sha256(octets).hexdigest() for f in notes):
@@ -590,7 +622,7 @@ def _controler_table(c, table, chemin):
             c.nombre(table["search"][cle], "%s.search.%s" % (chemin, cle))
     if "export_plans" in table:
         ici = chemin + ".export_plans"
-        arguments = table["export_plans"]
+        arguments, deja = table["export_plans"], len(c.violations)
         if not c.objet(arguments, ici, CLES_ARGUMENTS):
             return
         for i, action in c.liste(arguments["action_values"], ici + ".action_values"):
@@ -611,6 +643,43 @@ def _controler_table(c, table, chemin):
                 c.nombre(ligne["prob"], la + ".prob")
         for cle in ("regularize_lambda", "boost", "max_prob"):
             c.nombre(arguments[cle], "%s.%s" % (ici, cle))
+        if len(c.violations) == deja:  # la cohérence ne se juge que sur des arguments bien formés
+            _controler_coherence(c, arguments, ici)
+
+
+def _controler_coherence(c, arguments, ici):
+    """I1 à I3 (#40) sur les arguments bruts d'export_plans d'une table, déjà contrôlés dans leur forme.
+
+    Trois liens que la couche D ne rejoue pas (export_plans déballe le score sans le lire, ne lit pas la
+    probabilité d'`action_values`, arrondit valeurs et probabilités) : ils gardent le score, la probabilité
+    et ce qui reste sous l'arrondi contre une retouche d'une seule de ces données. Une retouche qui les
+    déplace ensemble (valeur et score du même écart, par exemple) reste cohérente, donc invisible ici.
+    """
+    actions, coefficient = arguments["action_values"], arguments["regularize_lambda"]
+    for i, action in enumerate(actions):
+        la = "%s.action_values[%d]" % (ici, i)
+        attendu = action["value"] + coefficient * math.log(max(action["prob"], PLANCHER_PROB_SCORE))
+        if not abs(action["score"] - attendu) <= TOLERANCE_SCORE:
+            c.ko(la + ".score", "I1 : %r n'est pas value + regularize_lambda x ln(max(prob, %g)) = %r (écart %.3g, "
+                 "tolérance %g ; value %r, prob %r, regularize_lambda %r) : score, valeur ou probabilité retouché"
+                 % (action["score"], PLANCHER_PROB_SCORE, attendu, abs(action["score"] - attendu), TOLERANCE_SCORE,
+                    action["value"], action["prob"], coefficient))
+        if i and action["score"] > actions[i - 1]["score"]:
+            c.ko(la + ".score", "I2 : %r dépasse le score de l'action précédente (%r) : action_values est triée par "
+                 "score décroissant, et export_plans prend l'ordre de la liste" % (action["score"], actions[i - 1]["score"]))
+    designees = set()
+    for j, ligne in enumerate(arguments["prior_policy"]):
+        i = ligne.get("action")
+        if not _entier(i) or i >= len(actions):  # action hors d'action_values (`orders`), ou rang hors bornes
+            continue
+        designees.add(i)
+        if actions[i]["prob"] != ligne["prob"]:
+            c.ko("%s.action_values[%d].prob" % (ici, i), "I3 : %r n'est pas la probabilité de prior_policy[%d] (%r), qui "
+                 "désigne cette action. %s" % (actions[i]["prob"], j, ligne["prob"], SANS_ENGAGEMENT))
+    for i in range(len(actions)):
+        if i not in designees:
+            c.ko("%s.action_values[%d].prob" % (ici, i), "I3 : aucune ligne de prior_policy ne désigne cette action par "
+                 "son rang (`action`). %s" % SANS_ENGAGEMENT)
 
 
 def _controler_par_puissance(c, donnees, cle, nom_de_fichier, controle):
@@ -790,7 +859,9 @@ def controler(dossier=DOSSIER):
     une puissance), aucune chaîne hors manifeste plus longue qu'un ordre ni qui
     porte une ponctuation de phrase -- et, plus strictement, aucune qui ne soit un
     ordre, une puissance, une phase ou un mot du vocabulaire --, plafond de taille,
-    manifeste fidèle au dossier, aucun fichier d'un autre type.
+    manifeste fidèle au dossier, aucun fichier d'un autre type. Et, sur les arguments bruts
+    d'export_plans de chaque table, trois liens que la couche D ne rejoue pas (I1 à I3, #40 :
+    `_controler_coherence`).
     """
     dossier = Path(dossier)
     presents = fichiers_du_jeu(dossier)

@@ -148,6 +148,10 @@ MUTATIONS = (
      "SCORE_PROB_FLOOR = 1e-6\n", "SCORE_PROB_FLOOR = 1e-3\n"),
     ("lambda doublé dans le score recalculé", "pseudo_commitments",
      "values[action] + regularize_lambda * math.log(", "values[action] + 2.0 * regularize_lambda * math.log("),
+    # La seule qui vise D6 (#40) : la règle de verdict du registre de confiance (_score_promises). Une promesse
+    # est tenue dès que l'unité a reçu un ordre, quel qu'il soit, et non plus si cet ordre est celui promis.
+    ("verdict du registre : tenue dès que l'unité a reçu un ordre", "bot",
+     "if _normalize_order(promised) in actual_norm or held_as_promised:", "if played or held_as_promised:"),
 )
 
 

@@ -14,7 +14,9 @@ CI ni dans un workflow, à la main, par la session principale. Deux commandes :
 au manifeste : SESSION PRINCIPALE SEULE, après visa (ADR 0006, décision 6). Il refuse un
 jeu qui ne passe pas son contrôle, un résumé déjà là, des relevés dont le tirage 0 n'est
 pas la table figée du jeu, ou dont une recherche, A ou B, n'a pas le boost et le max_prob
-du tirage 0. `comparer` rend 0 (pas de régression), 1 (régression) ou 2 (non concluant, lot
+du tirage 0 ; et si le jeu, résumé écrit, ne passe plus son contrôle, il retire le résumé et
+remet le manifeste tel qu'il était (code 2, comme ses autres refus : le jeu est inchangé,
+`resumer` se relance ; #40). `comparer` rend 0 (pas de régression), 1 (régression) ou 2 (non concluant, lot
 invalide, relevé ou jeu illisible). --seulement et --sauf choisissent les fichiers de relevés
 par leur nom (un fichier par position : la seconde passe s'écarte par --sauf '*passe2*').
 Un lot se lit par numéro de tirage : chaque ligne de recherche, A ou B, porte un `game_id`
@@ -832,6 +834,7 @@ def commande_resumer(args, order_loc):
                             % (" et ".join(couche_d.MESURES), couche_d.HORS_MESURES, len(modifies), modifies[0].strip()))
         sha += "-modifie"
     fichiers = sorted({positions[p]["fichier"] for p in retenues})
+    manifeste_d_avant = (dossier / reference_jeu.MANIFESTE).read_bytes()  # remis tel quel si le contrôle refuse (#40)
     reference_jeu.ecrire_json(dossier / reference_jeu.REPETEE, resume)
     reference_jeu.ecrire_manifeste(dossier, dict(jeu["manifeste"], repetee={
         "date": args.date or time.strftime("%Y-%m-%d"), "sha_code": sha, "commande": COMMANDE_RESUMER,
@@ -841,8 +844,13 @@ def commande_resumer(args, order_loc):
         },
     }))
     violations = reference_jeu.controler(dossier)
-    for violation in violations:
-        print("ÉCHEC : %s" % violation)
+    if violations:
+        # Le jeu passait son contrôle avant l'écriture (lire_reference) : on le rend tel qu'il était, octet pour
+        # octet, plutôt qu'un jeu refusé par son propre contrôle et qu'un `resumer` relancé refuserait (« existe déjà »).
+        (dossier / reference_jeu.REPETEE).unlink()
+        (dossier / reference_jeu.MANIFESTE).write_bytes(manifeste_d_avant)
+        raise ErreurLot("le jeu, avec ce résumé, ne passe pas son contrôle (%d violation(s)) : le résumé est retiré et le "
+                        "manifeste remis tel qu'il était, rien n'est gardé.\n  %s" % (len(violations), "\n  ".join(violations)))
     print("Résumé de %d position(s) écrit dans %s (%d octets ; code %s)." % (
         len(retenues), dossier / reference_jeu.REPETEE, (dossier / reference_jeu.REPETEE).stat().st_size, sha))
     print("  %d fichier(s) de relevés, %d recherche(s) A ; tirage 0 égal à la table figée du jeu : %d position(s) sur %d."
@@ -851,7 +859,7 @@ def commande_resumer(args, order_loc):
     if ecartees:
         print("  %d position(s) de moins de %d recherches A, hors couche R : %s"
               % (len(ecartees), N_MIN_REFERENCE, ", ".join(nom_position(p) for p in ecartees)))
-    return 1 if violations else 0
+    return 0
 
 
 def main(argv=None):

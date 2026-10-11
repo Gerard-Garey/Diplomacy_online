@@ -537,6 +537,29 @@ class Commandes(AvecDossiers):
         self.assertEqual(code, 2)
         self.assertIn("ne passe pas son contrôle", erreur)
 
+    def test_resumer_en_echec_de_controle_laisse_le_jeu_inchange(self):
+        # #40 : le résumé et le manifeste étaient écrits avant le contrôle ; s'il échouait, `resumer` rendait 1 en
+        # laissant un jeu refusé par son propre contrôle, et une relance était refusée (« existe déjà »). Ici le
+        # jeu passe son contrôle sans le résumé et dépasse le plafond de taille avec lui.
+        def etat():
+            return {f: (self.jeu / f).read_bytes() for f in reference_jeu.fichiers_du_jeu(self.jeu)}
+
+        avant = etat()
+        taille = sum(len(octets) for octets in avant.values())
+        with mock.patch.object(reference_jeu, "PLAFOND_OCTETS", taille + 100):
+            self.assertEqual(reference_jeu.controler(self.jeu), [])
+            code, sortie, erreur = self.resumer()
+        self.assertEqual((code, sortie), (2, ""))
+        self.assertIn("couche R : le jeu, avec ce résumé, ne passe pas son contrôle (1 violation(s)) : le résumé est retiré "
+                      "et le manifeste remis tel qu'il était, rien n'est gardé.", erreur)
+        self.assertIn("plafond %d" % (taille + 100), erreur)
+        self.assertEqual(etat(), avant)
+        self.assertEqual(reference_jeu.controler(self.jeu), [])
+        # La relance est possible : la cause levée, le même appel écrit le résumé.
+        code, _sortie, erreur = self.resumer()
+        self.assertEqual((code, erreur), (0, ""))
+        self.assertEqual(reference_jeu.controler(self.jeu), [])
+
     def test_resumer_refuse_deux_fichiers_pour_une_position(self):
         double = self.releves / "m1_9_S1901M_FRANCE_engagements-passe2_0.jsonl"
         double.write_text((self.releves / "m1_9_S1901M_FRANCE_engagements_0.jsonl").read_text(encoding="utf-8"), encoding="utf-8")
@@ -1088,6 +1111,36 @@ class ControleDuJeu(AvecDossiers):
         # La fonction ecrire_manifeste, elle, refait toutes les empreintes : `resumer` et `construire_jeu` s'en servent.
         reference_jeu.ecrire_manifeste(self.jeu, json.loads(self.manifeste))
         self.assertEqual(reference_jeu.controler(self.jeu), [])
+
+    def test_manifeste_n_enterine_pas_un_resume_sorti_puis_remis(self):
+        # #40 : le résumé sorti du dossier, `manifeste` (le fichier n'est plus noté, le bloc reste), le résumé
+        # retouché remis, `manifeste`. Aucune édition du manifeste à la main ; le second appel entérinait la retouche.
+        fichier = self.jeu / reference_jeu.REPETEE
+        fichier.unlink()
+        self.assertEqual(self.manifeste_du_jeu(), (0, ""))
+        sans_note = (self.jeu / "manifeste.json").read_text(encoding="utf-8")
+        self.assertIn("repetee", json.loads(sans_note))
+        self.assertNotIn(reference_jeu.REPETEE, [f["chemin"] for f in json.loads(sans_note)["fichiers"]])
+        retouche = json.loads(self.resume)
+        retire = sorted(retouche["positions"]["S1901M"]["FRANCE"]["order_values"])[0]
+        del retouche["positions"]["S1901M"]["FRANCE"]["order_values"][retire]
+        reference_jeu.ecrire_json(fichier, retouche)
+        code, erreur = self.manifeste_du_jeu()
+        self.assertEqual(code, 2)
+        self.assertIn("REFUS : %s est dans le dossier et le manifeste en porte le bloc « repetee », mais ne note plus ce "
+                      "fichier (ni taille ni empreinte)" % fichier, erreur)
+        self.assertIn("la commande `manifeste` ne l'entérine pas, rien n'est écrit.", erreur)
+        self.assertIn("python3 tests/reference_couche_r.py resumer <relevés> --vers %s" % self.jeu, erreur)
+        self.assertEqual((self.jeu / "manifeste.json").read_text(encoding="utf-8"), sans_note)
+        self.assertTrue(reference_jeu.controler(self.jeu))  # le jeu reste refusé par son contrôle
+        # Le résumé d'origine remis n'est pas mieux reçu : rien, dans ce manifeste, ne le distingue d'un autre.
+        fichier.write_text(self.resume, encoding="utf-8")
+        self.assertEqual(self.manifeste_du_jeu()[0], 2)
+        # Les deux sorties que le refus donne : restaurer le manifeste avec le résumé, ou les trois temps.
+        (self.jeu / "manifeste.json").write_text(self.manifeste, encoding="utf-8")
+        self.assertEqual(self.manifeste_du_jeu(), (0, ""))
+        self.assertEqual(reference_jeu.controler(self.jeu), [])
+        self.assertEqual((self.jeu / "manifeste.json").read_text(encoding="utf-8"), self.manifeste)
 
     def manifeste_du_jeu(self, dossier=None):
         """(code, sortie d'erreur) de la commande `manifeste`."""
