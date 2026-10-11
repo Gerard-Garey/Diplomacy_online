@@ -41,10 +41,10 @@ MAX_EXCHANGES_PER_PAIR_PER_PHASE = 10
 # table. It is NOT well above the noise of the compared gain: from one search
 # of a position to the next the gain moves by 0.003 (median), 0.030 (95th
 # centile), 0.068 (99th), 0.150 at most -- 0.0225 (99th) for the pairs whose
-# two orders are carried by the same action in every search compared, 0.0772
-# for the others (half of the observations). Measured 2026-10-10 on one game,
-# 1901-1903: tests/mesure/bruit_valeurs.py, issue #26, ADR 0004 ("Limites
-# connues").
+# two orders each keep their carrying action across the searches compared,
+# 0.0772 for the others (half of the observations). Measured 2026-10-10 on
+# one game, 1901-1903: tests/mesure/bruit_valeurs.py, issue #26, ADR 0004
+# ("Limites connues").
 COMMITMENT_SWITCH_MARGIN = 0.05
 # A cost at or below this is shown to Claude as "free": exported plans are ranked
 # by score, not by value, so a cost can be nil or negative.
