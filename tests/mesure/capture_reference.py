@@ -375,13 +375,17 @@ MAJORATION_OBSERVEE = 1.66
 
 
 def lire_positions(valeurs):
-    """« S1902M » (les sept puissances) ou « S1902M:FRANCE » -> [(phase, puissance)], sans doublon."""
+    """« S1902M » (les sept puissances) ou « S1902M:FRANCE » -> [(phase, puissance)], sans doublon.
+
+    Lève ValueError sur une phase ou une puissance inconnue : `main` en fait un refus d'argparse (code 2, rien sur
+    la sortie standard), comme pour les autres arguments.
+    """
     positions = []
     for valeur in valeurs:
         phase, _, puissance = valeur.partition(":")
         puissances = [puissance.upper()] if puissance else list(commun.POWERS)
         if puissances[0] not in commun.POWERS or not phase_valide(phase):
-            raise SystemExit("position inconnue : %r" % valeur)
+            raise ValueError("position inconnue : %r" % valeur)
         positions += [(phase, p) for p in puissances if (phase, p) not in positions]
     return positions
 
@@ -630,7 +634,10 @@ def main(argv=None):
         for option, valeur in (("--dossier", args.dossier), ("--reseau", args.reseau)):
             if valeur is not None and not args.couche_r:  # sans --couche-r, elle serait ignorée sans le dire
                 k.error("%s ne vaut qu'avec --couche-r" % option)
-        repetees = list(POSITIONS_REPETEES) if args.repetees is None else lire_positions(args.repetees)
+        try:
+            repetees = list(POSITIONS_REPETEES) if args.repetees is None else lire_positions(args.repetees)
+        except ValueError as e:
+            k.error(str(e))
         if args.couche_r:
             print("\n".join(commandes_de_la_couche_r(
                 args.game_id, repetees, args.tirages, args.score, args.minutes_de_phase,

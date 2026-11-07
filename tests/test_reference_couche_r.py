@@ -596,6 +596,30 @@ class Commandes(AvecDossiers):
         code, _sortie, erreur = self.resumer()
         self.assertEqual((code, erreur), (0, ""))
 
+    def test_resumer_refuse_un_fichier_temporaire_apparu_apres_le_controle(self):
+        # #40 (constat de l'audit, mesuré) : un fichier *.ecriture apparu après le contrôle de lire_reference fait lever
+        # Refus à ecrire_manifeste ; la remise était faite, mais main ne l'attrapait pas : trace, code 1. Refus, code 2.
+        avant = self.etat_du_jeu()
+        temporaire = self.jeu / "tables" / ".S1901M.json.ecriture"
+        ecrire = reference_jeu.ecrire_json
+
+        def doublure(chemin, donnees):  # le résumé s'écrit, puis le fichier temporaire d'une autre écriture apparaît
+            ecrire(chemin, donnees)
+            temporaire.write_text("", encoding="utf-8")
+
+        with mock.patch.object(reference_jeu, "ecrire_json", side_effect=doublure):
+            code, sortie, erreur = self.resumer()
+        self.assertEqual((code, sortie), (2, ""))
+        self.assertNotIn("Traceback", erreur)
+        self.assertEqual(erreur, "couche R : %s : fichier temporaire d'une écriture interrompue (arrêt brutal pendant "
+                         "ecrire_octets) : le retirer, puis vérifier le fichier qu'il devait remplacer (le restaurer depuis "
+                         "git au besoin) ; le manifeste n'est pas écrit ; le résumé est retiré et le manifeste remis tel "
+                         "qu'il était, rien n'est gardé\n" % temporaire)
+        temporaire.unlink()
+        self.assertEqual(self.etat_du_jeu(), avant)
+        code, _sortie, erreur = self.resumer()
+        self.assertEqual((code, erreur), (0, ""))
+
     def test_une_remise_interrompue_laisse_un_manifeste_entier(self):
         # Le contrôle refuse, puis la remise du manifeste est interrompue avant son remplacement : le manifeste reste
         # entier (celui que `resumer` venait d'écrire, avec le résumé), et le fichier temporaire est retiré.
@@ -1302,6 +1326,31 @@ class ControleDuJeu(AvecDossiers):
         autre.unlink()
         self.assertEqual(self.manifeste_du_jeu(), (0, ""))
         self.assertEqual(reference_jeu.controler(self.jeu), [])
+
+    def test_manifeste_refuse_un_echec_d_ecriture(self):
+        # Constat de la revue finale (#38, même mécanisme que `reduire`) : un dossier en lecture seule faisait sortir
+        # `manifeste` par une trace, code 1. Refus d'une ligne, code 2, manifeste inchangé (doublure : un chmod ne
+        # refuse rien à root, en CI).
+        with mock.patch.object(reference_jeu, "ecrire_octets", side_effect=OSError(28, "No space left on device")):
+            code, erreur = self.manifeste_du_jeu()
+        self.assertEqual((code, erreur), (2, "REFUS : %s : lecture ou écriture impossible (OSError : No space left on device)\n"
+                                          % self.jeu))
+        self.assertEqual((self.jeu / "manifeste.json").read_text(encoding="utf-8"), self.manifeste)
+        # Un fichier du jeu illisible (constat C1 de l'audit) : ecrire_manifeste le lit pour son empreinte ; le refus ne
+        # parle pas d'une écriture (doublure de read_bytes : un chmod ne refuse rien à root, en CI).
+        illisible = self.jeu / "tables" / "S1901M.json"
+        lire = Path.read_bytes
+
+        def read_bytes(chemin):
+            if chemin == illisible:
+                raise PermissionError(13, "Permission denied", str(chemin))
+            return lire(chemin)
+
+        with mock.patch.object(Path, "read_bytes", read_bytes):
+            code, erreur = self.manifeste_du_jeu()
+        self.assertEqual((code, erreur), (2, "REFUS : %s : lecture ou écriture impossible (PermissionError : Permission denied)\n"
+                                          % illisible))
+        self.assertEqual((self.jeu / "manifeste.json").read_text(encoding="utf-8"), self.manifeste)
 
     def manifeste_du_jeu(self, dossier=None):
         """(code, sortie d'erreur) de la commande `manifeste`."""

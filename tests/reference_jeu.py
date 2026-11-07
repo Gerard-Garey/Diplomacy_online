@@ -277,6 +277,15 @@ def ecrire_octets(chemin, octets):
         raise
 
 
+def _echec_d_acces(erreur, defaut):
+    """Le texte d'un refus pour une OSError : le chemin en cause (celui de l'erreur, sinon `defaut`) et la cause.
+
+    Neutre : construire_jeu et ecrire_manifeste lisent aussi les fichiers du jeu (empreintes, contrôle).
+    """
+    return "%s : lecture ou écriture impossible (%s : %s)" % (
+        erreur.filename or defaut, type(erreur).__name__, str(erreur.strerror or erreur)[:120])
+
+
 def ecrire_json(chemin, donnees):
     """Une ligne, sans espace : la taille compte (plafond). Les flottants gardent leur écriture exacte."""
     ecrire_octets(chemin, (json.dumps(donnees, ensure_ascii=True, separators=(",", ":"), allow_nan=False) + "\n").encode("utf-8"))
@@ -486,6 +495,10 @@ def reduire_releve(ligne, recherche="A", tirage=0, a_sec=False):
     n'a pas ses quatre clés : une table réduite ne se devine pas ; et, retenue ou non, si
     le numéro de tirage n'est pas un entier positif ou nul, comme lire_lot de
     tests/reference_couche_r.py : False et 0.0 valent 0 pour Python, et passaient pour le tirage 0.
+
+    Le mode du relevé (« engagements » ou --incremental de tests/mesure/rejeu_moteur.py) n'est pas contrôlé,
+    à dessein : la recherche A suit le même chemin dans les deux modes (rejeu_moteur.py:503-506) et seule une
+    recherche A entre dans le jeu. lire_lot, lui, refuse le mode --incremental, à cause de ses recherches B.
     """
     if "comparaison" in ligne:
         return None, None, "ligne de comparaison (mode incrémental)"
@@ -1343,13 +1356,19 @@ def main(argv=None):
             # (le contrôle final de construire_jeu, lui, laisse les fichiers écrits, pour être lus).
             historique = lire_historique(args.historique)
             tables, ecartes = reduire_fichiers(args.releves, args.recherche, args.tirage, partie=args.partie, sauf=args.sauf or ())
-            manifeste = construire_jeu(
-                args.vers, historique, tables,
-                {
-                    "partie": {"numero": args.partie, "creee_le": args.creee_le, "nature": NATURE},
-                    "capture": {"date": args.date, "sha_code": args.sha, "image": args.image, "commande": args.commande},
-                },
-            )
+            try:
+                manifeste = construire_jeu(
+                    args.vers, historique, tables,
+                    {
+                        "partie": {"numero": args.partie, "creee_le": args.creee_le, "nature": NATURE},
+                        "capture": {"date": args.date, "sha_code": args.sha, "image": args.image, "commande": args.commande},
+                    },
+                )
+            except OSError as e:  # --vers est un fichier, ou sous un dossier en lecture seule (#38) : un refus, pas une trace
+                laisses = fichiers_du_jeu(args.vers)  # pas de nettoyage : on dit ce qui reste (avis d'expert-webdip)
+                raise Refus(_echec_d_acces(e, args.vers) + (
+                    " ; %d fichier(s) déjà écrits restent dans --vers : le vider avant de relancer" % len(laisses)
+                    if laisses else ""))
         except Refus as e:
             print("REFUS : %s" % e, file=sys.stderr)
             return 2
@@ -1369,7 +1388,10 @@ def main(argv=None):
             if not isinstance(manifeste, dict):
                 raise Refus("%s : objet attendu, %s trouvé" % (dossier / MANIFESTE, type(manifeste).__name__))
             refuser_resume_retouche(dossier, manifeste)
-            ecrire_manifeste(dossier, manifeste)
+            try:
+                ecrire_manifeste(dossier, manifeste)
+            except OSError as e:  # dossier en lecture seule, ou fichier du jeu illisible : le même refus que pour `reduire`
+                raise Refus(_echec_d_acces(e, dossier))
         except Refus as e:
             print("REFUS : %s" % e, file=sys.stderr)
             return 2

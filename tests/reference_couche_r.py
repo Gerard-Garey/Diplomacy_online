@@ -503,9 +503,12 @@ def lire_lot(dossier, order_loc, seulement=None, sauf=()):
     "fichier"}}. La lecture des tables est celle de bruit_valeurs.lire_releves ; les contrôles
     (`controles`, `appels_export`) sont relus ligne à ligne. Chaque ligne de recherche est de type A ou B,
     du mode « engagements » de rejeu_moteur.py (#40), et porte un game_id entier et un numéro de tirage entier, positif ou nul, écrit une seule fois par type de
-    recherche dans sa position (#37) : le numéro porte l'identité de la référence (le tirage 0 est la
-    table figée du jeu) et apparie la recherche B à la recherche A de son tirage. Lève ErreurLot (ou
-    bruit_valeurs.ErreurReleve) sur un lot inutilisable."""
+    recherche dans sa position (#37) : le numéro identifie le tirage (le tirage 0 est la table figée du
+    jeu). Dans un tirage, la recherche B suit la recherche A dans le même processus, sur l'engagement
+    figé à la recherche A du tirage 0 (tests/mesure/rejeu_moteur.py:515-521) ; comparer ne rapproche
+    pas A et B d'un même tirage, et le nombre de recherches B n'est contrôlé que par le décompte de
+    tests/mesure/lancer_couche_r.sh. Lève ErreurLot (ou bruit_valeurs.ErreurReleve) sur un lot
+    inutilisable."""
     dossier = Path(dossier)
     if not dossier.is_dir():
         raise ErreurLot("%s n'est pas un dossier" % dossier)
@@ -869,6 +872,11 @@ def commande_resumer(args, order_loc):
         reference_jeu.ecrire_json(dossier / reference_jeu.REPETEE, resume)
         reference_jeu.ecrire_manifeste(dossier, dict(jeu["manifeste"], repetee=bloc))
         violations = reference_jeu.controler(dossier)
+    except reference_jeu.Refus as e:
+        # ecrire_manifeste refuse un fichier temporaire d'écriture interrompue (*.ecriture) apparu après le contrôle de
+        # lire_reference : même remise, puis un refus comme les autres (code 2), pas une trace (#40).
+        _remettre(dossier, manifeste_d_avant)
+        raise ErreurLot("%s ; le résumé est retiré et le manifeste remis tel qu'il était, rien n'est gardé" % e)
     except BaseException:
         # Échec d'écriture ou interruption (KeyboardInterrupt compris) entre le résumé et le manifeste : même remise.
         _remettre(dossier, manifeste_d_avant)

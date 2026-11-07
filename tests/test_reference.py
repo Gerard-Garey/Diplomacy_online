@@ -425,6 +425,40 @@ class Reducteur(AvecJeu):
         self.assertEqual(self.refus([self.racine / "absent.jsonl"], "--recherche", "B", historique=self.racine / "absent.json"),
                          attendu % "B")
 
+    def test_un_echec_d_ecriture_de_vers_est_un_refus(self):
+        # #38 (constat de l'audit, mesuré) : --vers sur un fichier ordinaire, ou sous un dossier en lecture seule,
+        # sortait par une trace de construire_jeu, code 1. Refus d'une ligne, code 2, qui nomme le chemin et la cause.
+        historique = self.racine / "historique.json"
+        historique.write_text(json.dumps(self.historique), encoding="utf-8")
+        fichier = self.racine / "fichier"
+        fichier.write_text("", encoding="utf-8")
+        code, sortie = self.commande([self._releves()], fichier, historique, 9)
+        self.assertEqual((code, sortie), (2, "REFUS : %s : lecture ou écriture impossible (FileExistsError : File exists)\n" % fichier))
+        self.assertEqual(fichier.read_text(encoding="utf-8"), "")
+        # Lecture seule doublée (un chmod ne refuse rien à root, en CI) : l'erreur de la première écriture.
+        vers = self.racine / "lecture_seule"
+        temporaire = vers / ".historique.json.ecriture"
+        with mock.patch.object(reference_jeu, "ecrire_octets", side_effect=PermissionError(13, "Permission denied", str(temporaire))):
+            code, sortie = self.commande([self._releves()], vers, historique, 9)
+        self.assertEqual((code, sortie), (2, "REFUS : %s : lecture ou écriture impossible (PermissionError : Permission denied)\n"
+                                          % temporaire))
+        self.assertFalse(vers.exists())
+        # Échec à la deuxième écriture (disque plein) : historique.json reste ; le refus le dit, sans rien nettoyer.
+        vers = self.racine / "disque_plein"
+        vraie, appels = reference_jeu.ecrire_octets, []
+
+        def doublure(chemin, octets):
+            appels.append(chemin)
+            if len(appels) == 2:
+                raise OSError(28, "No space left on device", str(chemin))
+            vraie(chemin, octets)
+
+        with mock.patch.object(reference_jeu, "ecrire_octets", side_effect=doublure):
+            code, sortie = self.commande([self._releves()], vers, historique, 9)
+        self.assertEqual((code, sortie), (2, "REFUS : %s : lecture ou écriture impossible (OSError : No space left on device) ; 1 "
+                                          "fichier(s) déjà écrits restent dans --vers : le vider avant de relancer\n" % appels[1]))
+        self.assertEqual(reference_jeu.fichiers_du_jeu(vers), ["historique.json"])
+
     def test_un_numero_de_tirage_qui_n_est_pas_un_entier_est_refuse(self):
         # #40 (constat de lecture, mesuré) : False et 0.0 valent 0 pour Python, et reduire_releve les retenait comme
         # le tirage 0 ; True et 1.0, comme le tirage 1. Refusés, comme dans lire_lot (#37), retenus ou non.
@@ -2380,9 +2414,12 @@ class Capture(unittest.TestCase):
 
     def test_la_phase_d_une_position_repetee_est_validee(self):
         """--repetees porte aussi une phase, imprimée dans les lancements et dans --positions : même refus de
-        lire_positions que pour une puissance inconnue, rien d'imprimé."""
-        for options in (("--repetees", "S1901M;id:FRANCE"), ("--couche-r", "--repetees", "S1902M;id"), ("--couche-r", "--repetees", ":FRANCE")):
-            self.assertEqual(self.refus(*options), "position inconnue : %r" % options[-1], options)
+        lire_positions que pour une puissance inconnue, rien d'imprimé. Code 2, comme --phases S1999X (#33 : il
+        sortait en code 1, par un SystemExit à message, quand lancer_couche_r.sh annonce un refus en code 2)."""
+        for options in (("--repetees", "S1901M;id:FRANCE"), ("--couche-r", "--repetees", "S1902M;id"), ("--couche-r", "--repetees", ":FRANCE"),
+                        ("--repetees", "S1999X:FRANCE"), ("--repetees", "S1901M:FOO"), ("--couche-r", "--repetees", "S1999X:FRANCE")):
+            self.assertEqual(self.refus(*options), 2, options)
+            self.assertIn("error: position inconnue : %r" % options[-1], self.message, options)
 
     def test_le_releve_du_site_ne_porte_plus_processstatus(self):
         """game/status n'expose pas processStatus : le relevé le donnait toujours nul. Il n'y est plus, ni dans le
@@ -2450,7 +2487,7 @@ class Capture(unittest.TestCase):
     def test_positions_repetees_donnees_en_couples(self):
         self.assertEqual(capture_reference.lire_positions(["S1902M:france", "F1901M", "S1902M:FRANCE"]),
                          [("S1902M", "FRANCE")] + [("F1901M", p) for p in capture_reference.commun.POWERS])
-        with self.assertRaises(SystemExit):
+        with self.assertRaises(ValueError):
             capture_reference.lire_positions(["S1902M:PARIS"])
         sortie = self.commandes("--phases", "S1902M", "--repetees", "S1902M:ITALY", "--tirages", "3")
         recherches = [l.split() for l in sortie.splitlines() if "rejeu_moteur.py" in l]
