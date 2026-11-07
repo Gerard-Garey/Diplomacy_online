@@ -77,6 +77,7 @@ docker exec -e XDEBUG_MODE=off webdiplomacy-php-fpm-1 \
 | `bash tests/verifier.sh` | Batterie statique (syntaxe, patchs, absence de secret et de chemin personnel, contrôle du jeu d'essai figé et des noms de fichiers du dépôt) et tests par appel direct : bot de dialogue, logique des promesses, mesure du bruit des valeurs, outillage de la référence, puis couche D de la référence de non-régression ; tourne sans la pile, sans GPU et sans appel à Claude |
 | `python3 tests/mesure/capture_reference.py commandes <gameID> --couche-r` | Imprime, sans rien lancer, les commandes d'un lot de la couche R : recherches réelles sur les 21 positions répétées, `cicero-orders` arrêté (2 h 26 estimées, 4 h 02 mesurées le 2026-10-11) ; à la main, jamais en CI |
 | `python3 tests/reference_couche_r.py comparer <relevés>` | Compare ce lot au résumé de la référence ; code 0 : pas de régression, 1 : régression, 2 : non concluant ou lot invalide |
+| `python3 tests/reference_jeu.py reduire <relevés> …` | Réduit les relevés d'une campagne de capture en jeu d'essai : session principale seule, après visa. Code 2 : refus, une ligne « REFUS : » qui nomme le fichier et la cause, rien d'écrit (sauf si le jeu écrit ne passe pas le contrôle final : fichiers laissés pour être lus). La seconde passe s'écarte par `--sauf '*passe2*'`, comme pour `resumer`. Procédure : `docs/doc/architecture.md` § 7 |
 
 ## Organisation du dépôt
 
