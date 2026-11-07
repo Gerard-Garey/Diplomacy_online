@@ -1,8 +1,11 @@
 """Marque d'un défaut connu : échec attendu, renvoyant à son issue (règle des tests de CLAUDE.md).
 
 Même enveloppe que celle de tests/test_promesses.py (`echec_attendu`), le fichier du test étant
-donné : sert à tests/test_reference.py et à tests/test_reference_couche_r.py. Quand l'issue est
-corrigée, le test réussit, la batterie échoue (succès inattendu) et la marque est retirée.
+donné. Aucun test ne s'en sert à ce jour (tests/test_reference.py et tests/test_reference_couche_r.py
+n'en portent plus, #37) : il est gardé pour le prochain défaut connu (décision du mainteneur M114,
+docs/feuille-de-route.md).
+Quand l'issue est corrigée, le test réussit, la batterie échoue (succès inattendu) et la marque
+est retirée.
 """
 import functools
 import os

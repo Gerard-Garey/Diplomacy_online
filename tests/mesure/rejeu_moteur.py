@@ -144,7 +144,8 @@ class MoteurReel:
         statut = get_status_json(self.ctx)  # GET game/status : lecture seule
         if statut is None:
             raise SystemExit("statut de la partie %s illisible" % self.game_id)
-        releve = {k: statut.get(k) for k in ("gameID", "turn", "phase", "gameOver", "processStatus")}
+        # Pas de processStatus : game/status ne l'expose pas, il valait toujours null (#33).
+        releve = {k: statut.get(k) for k in ("gameID", "turn", "phase", "gameOver")}
         courante = webdip_state_to_game(statut)
         releve["phase_courante"] = courante.current_short_phase
         self.game = courante.rolled_back_to_phase_start(self.phase)
