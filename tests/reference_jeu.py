@@ -20,10 +20,13 @@ autre partie que --partie, un fichier donné deux fois ou deux fichiers de même
 répétée porte plusieurs relevés de cette position (ses tirages, recherches A et B), un seul est retenu (--sauf
 écarte des fichiers par leur nom, comme pour `resumer` : la seconde passe s'écarte par --sauf '*passe2*' ; un
 dossier vaut ses m1_*.jsonl). Seul le refus du contrôle final de `construire_jeu` (le jeu écrit ne passe pas
-`controler`), code 2 lui aussi, laisse dans --vers les fichiers écrits, pour être lus. `manifeste` refait la liste des
-fichiers et les tailles d'un jeu dont les fichiers ont changé (attendus régénérés) ; il
+`controler`), code 2 lui aussi, laisse dans --vers les fichiers écrits, pour être lus. --recherche autre que A
+est refusé d'emblée, avant toute lecture : le jeu ne reçoit que des recherches sans engagement (I3, plus bas). Un
+numéro de tirage qui n'est pas un entier positif ou nul (booléen et flottant compris) est refusé, sur toute ligne
+de recherche. `manifeste` refait la liste des fichiers et les tailles d'un jeu dont les fichiers ont changé
+(attendus régénérés) ; il
 refuse, sans rien écrire, un jeu dont le résumé (repetee.json) n'est plus celui que le manifeste a noté,
-ou que le manifeste ne note plus alors qu'il en porte le bloc.
+que le manifeste ne note plus alors qu'il en porte le bloc, ou qui manque alors que le manifeste en porte le bloc.
 
 Format (ADR 0006, décision 2), un dossier :
 
@@ -47,7 +50,9 @@ Ces arguments bruts sont liés entre eux, et le contrôle le vérifie sur chaque
 la couche D ne lit ni le score, ni la probabilité d'`action_values`, ni ce qu'une valeur ou une probabilité
 garde sous l'arrondi de l'export) : le score est value + regularize_lambda x ln(max(prob, 1e-6)) (I1), les
 scores ne croissent pas le long de la liste (I2), et la probabilité d'une action est celle de sa ligne de
-`prior_policy` (I3). I3 ne vaut que sans engagement : le jeu ne reçoit que des tables de recherches A.
+`prior_policy`, à l'identique, une ligne par action (I3) ; la tolérance de 1e-12 n'est que celle du score (I1).
+I3 ne vaut que sans engagement -- avec engagement, le renfort peut déplacer la probabilité d'`action_values` -- :
+le jeu ne reçoit que des tables de recherches A, et `reduire` refuse d'emblée une autre recherche (--recherche).
 
 <résumé> (tests/reference_couche_r.py, qui l'écrit et le lit ; ADR 0006, décision 2 : des
 grandeurs résumées et leurs tolérances, jamais les recherches brutes) : `n` tirages ;
@@ -61,6 +66,7 @@ Ce qu'un relevé contient en plus n'entre pas : `computed_at`, `gpu`, `duree_s`,
 clés nommées ci-dessus, et le contrôle refuse toute autre clé.
 """
 import argparse
+import contextlib
 import errno
 import fnmatch
 import hashlib
@@ -78,6 +84,7 @@ RACINE = Path(__file__).resolve().parents[1]
 DOSSIER = RACINE / "tests" / "reference"
 EMPLACEMENT = "tests/reference"  # seul dossier admis, relatif à la racine du dépôt
 MANIFESTE, HISTORIQUE, TABLES, ATTENDUS = "manifeste.json", "historique.json", "tables", "attendus"
+SUFFIXE_ECRITURE = ".ecriture"  # fichier temporaire d'ecrire_octets, `.<nom>.ecriture`, que seul un arrêt brutal laisse
 REPETEE = "repetee.json"  # résumé des positions répétées (couche R) : facultatif, avec son bloc au manifeste
 FORMAT = 1
 NATURE = "100 % bots"
@@ -95,9 +102,11 @@ LONGUEUR_ORDRE_MAX = 24
 NOMS_D_ETAT = ("current_plans", "pseudo_commitments", "claude_dialogue_state")
 # Ce que le contrôle du manifeste dit d'un fichier retouché : tests/reference_couche_d.py (--generer) le relit.
 NE_CORRESPOND_PLUS = "ne correspond plus au manifeste"
-# Ce que le refus de I3 dit de sa portée (#40) : l'égalité est celle d'une recherche sans engagement.
-SANS_ENGAGEMENT = ("L'égalité ne vaut que pour une table de recherche sans engagement (recherche A) : avec engagement, "
-                   "le renfort déplace la probabilité d'action_values, et une telle table n'entre pas dans le jeu")
+# Ce que le refus d'une probabilité par I3 dit de sa portée (#40) : l'égalité, exacte, est celle d'une recherche sans
+# engagement. Pas celui d'une action sans ligne ou désignée deux fois : la forme de prior_policy, pas sa probabilité.
+SANS_ENGAGEMENT = ("L'égalité est exacte (la tolérance de 1e-12 est celle du score, I1) et ne vaut que pour une table de "
+                   "recherche sans engagement (recherche A) : avec engagement, le renfort peut déplacer la probabilité "
+                   "d'action_values, et le jeu ne reçoit que des recherches A")
 # Listes fermées, mesurées sur les 106 fichiers du dépôt le 2026-10-10. Une extension ou un nom nouveau
 # s'ajoute ici, dans le commit qui introduit le fichier : la ligne se voit dans le diff.
 EXTENSIONS_ADMISES = (
@@ -136,7 +145,8 @@ ENTIER_MAX = 2 ** 53  # au-delà, un entier JSON n'est plus un nombre que le for
 #     pice_value = value + regularize_lambda * np.log(max(prob, 1e-6))
 # puis la liste est triée par score décroissant (:342). Mesuré sur les 42 tables du jeu versionné (628 actions),
 # avec math.log : écart nul. La tolérance couvre un écart d'arrondi entre np.log et math.log d'une machine à
-# l'autre (prudence, non mesurée) ; elle est absolue, les scores étant de l'ordre de l'unité.
+# l'autre (prudence, non mesurée) ; elle est absolue, les scores étant de l'ordre de l'unité. Elle ne vaut que pour
+# le score (I1) : I3 compare deux probabilités recopiées, à l'identique (628 égalités exactes sur le jeu versionné).
 PLANCHER_PROB_SCORE = 1e-6
 TOLERANCE_SCORE = 1e-12
 
@@ -245,11 +255,31 @@ def _ordre_des_phases(phase):
 # Lecture et écriture
 # ---------------------------------------------------------------------------
 
-def ecrire_json(chemin, donnees):
-    """Une ligne, sans espace : la taille compte (plafond). Les flottants gardent leur écriture exacte."""
+def ecrire_octets(chemin, octets):
+    """Écrit le fichier d'un seul coup : un fichier temporaire du même dossier, puis os.replace.
+
+    Un échec d'écriture ou une interruption (KeyboardInterrupt compris) laisse le fichier tel qu'il était -- ou
+    absent s'il l'était -- et retire le fichier temporaire. Un fichier à la fois : deux fichiers écrits l'un après
+    l'autre (un résumé et le manifeste) ne le sont pas ensemble.
+    """
     chemin = Path(chemin)
     chemin.parent.mkdir(parents=True, exist_ok=True)
-    chemin.write_text(json.dumps(donnees, ensure_ascii=True, separators=(",", ":"), allow_nan=False) + "\n", encoding="utf-8")
+    temporaire = chemin.with_name(".%s%s" % (chemin.name, SUFFIXE_ECRITURE))
+    try:
+        with open(str(temporaire), "wb") as f:
+            f.write(octets)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(str(temporaire), str(chemin))
+    except BaseException:
+        with contextlib.suppress(OSError):
+            temporaire.unlink()
+        raise
+
+
+def ecrire_json(chemin, donnees):
+    """Une ligne, sans espace : la taille compte (plafond). Les flottants gardent leur écriture exacte."""
+    ecrire_octets(chemin, (json.dumps(donnees, ensure_ascii=True, separators=(",", ":"), allow_nan=False) + "\n").encode("utf-8"))
 
 
 def fichiers_du_jeu(dossier):
@@ -324,8 +354,18 @@ def lire_repetee(dossier):
 
 
 def ecrire_manifeste(dossier, manifeste):
-    """Écrit le manifeste après y avoir refait la liste des fichiers, leurs tailles et leurs empreintes."""
+    """Écrit le manifeste après y avoir refait la liste des fichiers, leurs tailles et leurs empreintes.
+
+    Lève Refus, avant toute écriture, si le dossier contient le fichier temporaire d'une écriture interrompue
+    (SUFFIXE_ECRITURE, #40) : le manifeste le listerait, puis la prochaine écriture du même fichier le renommerait,
+    et le manifeste citerait un fichier disparu.
+    """
     dossier = Path(dossier)
+    suspens = [f for f in fichiers_du_jeu(dossier) if f.endswith(SUFFIXE_ECRITURE)]
+    if suspens:
+        raise Refus("%s : fichier temporaire d'une écriture interrompue (arrêt brutal pendant ecrire_octets) : le retirer, "
+                    "puis vérifier le fichier qu'il devait remplacer (le restaurer depuis git au besoin) ; le manifeste "
+                    "n'est pas écrit" % ", ".join(str(dossier / f) for f in suspens))
     fichiers = []
     for relatif in fichiers_du_jeu(dossier):
         if relatif == MANIFESTE:
@@ -333,27 +373,31 @@ def ecrire_manifeste(dossier, manifeste):
         octets = (dossier / relatif).read_bytes()
         fichiers.append({"chemin": relatif, "octets": len(octets), "sha256": hashlib.sha256(octets).hexdigest()})
     manifeste = dict(manifeste, fichiers=fichiers, taille_octets=sum(f["octets"] for f in fichiers))
-    (dossier / MANIFESTE).write_text(
-        json.dumps(manifeste, ensure_ascii=False, indent=1) + "\n", encoding="utf-8"
-    )
+    ecrire_octets(dossier / MANIFESTE, (json.dumps(manifeste, ensure_ascii=False, indent=1) + "\n").encode("utf-8"))
     return manifeste
 
 
 def refuser_resume_retouche(dossier, manifeste):
     """Lève Refus si le résumé (repetee.json) présent n'est pas celui que le manifeste a noté, taille et empreinte.
 
-    Garde de la commande `manifeste` : refaire les empreintes entérinerait un résumé retouché. Deux cas : le
+    Garde de la commande `manifeste` : refaire les empreintes entérinerait un résumé retouché. Trois cas : le
     manifeste note le fichier et le fichier présent a une autre taille ou une autre empreinte ; le manifeste
-    ne le note plus mais porte le bloc « repetee » (#40 : le résumé sorti du dossier, `manifeste`, le résumé
-    retouché remis, `manifeste` -- au second appel, rien ne dit plus que le fichier est celui que le bloc décrit).
-    Un résumé absent du dossier passe (deuxième des trois temps qui le refont : fichier et bloc supprimés,
-    manifeste refait, puis `resumer`), comme un fichier que le manifeste ne note pas et dont il n'a pas le bloc
-    (le contrôle, lui, refuse ce résumé sans bloc).
+    ne le note plus mais porte le bloc « repetee » ; le manifeste porte le bloc et le fichier n'est pas dans le
+    dossier (#40 : le résumé sorti du dossier, `manifeste`, le résumé retouché remis, `manifeste` -- le premier
+    appel est refusé, et il n'écrit donc pas le manifeste qui ne noterait plus le fichier et que le contrôle refuse).
+    Un résumé absent du dossier passe quand le bloc est retiré aussi (deuxième des trois temps qui le refont :
+    fichier et bloc supprimés, manifeste refait, puis `resumer`), comme un fichier que le manifeste ne note pas et
+    dont il n'a pas le bloc (le contrôle, lui, refuse ce résumé sans bloc).
     """
     fichier = Path(dossier) / REPETEE
     fichiers = manifeste.get("fichiers")
     notes = [f for f in fichiers if isinstance(f, dict) and f.get("chemin") == REPETEE] if isinstance(fichiers, list) else []
     if fichier.is_symlink() or not fichier.is_file():
+        if "repetee" in manifeste:
+            raise Refus("le manifeste porte le bloc « repetee » mais %s n'est pas dans le dossier : refaire le manifeste "
+                        "sans le résumé donnerait un jeu que le contrôle refuse (bloc sans fichier), rien n'est écrit. "
+                        "Restaurer le résumé depuis git, ou retirer aussi le bloc « repetee » du manifeste (deux des trois "
+                        "temps qui refont le résumé) avant de relancer `manifeste`" % fichier)
         return
     if not notes:
         if "repetee" in manifeste:
@@ -439,10 +483,15 @@ def reduire_releve(ligne, recherche="A", tirage=0, a_sec=False):
     Retenue : la recherche `recherche` du tirage `tirage` (par défaut la recherche A,
     sans engagement, du premier tirage). Un relevé d'essai à sec (table de la
     doublure) est refusé, sauf `a_sec`. Lève Refus si l'entrée exportée manque ou
-    n'a pas ses quatre clés : une table réduite ne se devine pas.
+    n'a pas ses quatre clés : une table réduite ne se devine pas ; et, retenue ou non, si
+    le numéro de tirage n'est pas un entier positif ou nul, comme lire_lot de
+    tests/reference_couche_r.py : False et 0.0 valent 0 pour Python, et passaient pour le tirage 0.
     """
     if "comparaison" in ligne:
         return None, None, "ligne de comparaison (mode incrémental)"
+    if not _entier(ligne.get("tirage")):
+        raise Refus("numéro de tirage %s ; un entier positif ou nul est attendu, tel que l'écrit rejeu_moteur.py"
+                    % (repr(ligne["tirage"])[:40] if "tirage" in ligne else "absent"))
     if ligne.get("recherche") != recherche or ligne.get("tirage") != tirage:
         return None, None, "recherche %s, tirage %s" % (ligne.get("recherche"), ligne.get("tirage"))
     if ligne.get("a_sec") and not a_sec:
@@ -667,19 +716,23 @@ def _controler_coherence(c, arguments, ici):
         if i and action["score"] > actions[i - 1]["score"]:
             c.ko(la + ".score", "I2 : %r dépasse le score de l'action précédente (%r) : action_values est triée par "
                  "score décroissant, et export_plans prend l'ordre de la liste" % (action["score"], actions[i - 1]["score"]))
-    designees = set()
+    designees = {}  # rang d'une action -> première ligne de prior_policy qui la désigne
     for j, ligne in enumerate(arguments["prior_policy"]):
         i = ligne.get("action")
         if not _entier(i) or i >= len(actions):  # action hors d'action_values (`orders`), ou rang hors bornes
             continue
-        designees.add(i)
+        if i in designees:  # prior_policy est un dict d'actions : une action n'y a qu'une ligne, même à probabilité égale
+            c.ko("%s.prior_policy[%d].action" % (ici, j), "I3 : désigne l'action %d, déjà désignée par prior_policy[%d] : "
+                 "une action a une seule ligne dans prior_policy (ligne en double)" % (i, designees[i]))
+        else:
+            designees[i] = j
         if actions[i]["prob"] != ligne["prob"]:
             c.ko("%s.action_values[%d].prob" % (ici, i), "I3 : %r n'est pas la probabilité de prior_policy[%d] (%r), qui "
                  "désigne cette action. %s" % (actions[i]["prob"], j, ligne["prob"], SANS_ENGAGEMENT))
     for i in range(len(actions)):
         if i not in designees:
             c.ko("%s.action_values[%d].prob" % (ici, i), "I3 : aucune ligne de prior_policy ne désigne cette action par "
-                 "son rang (`action`). %s" % SANS_ENGAGEMENT)
+                 "son rang (`action`) : chaque action d'action_values y a sa ligne (ligne retirée, ou rang changé)")
 
 
 def _controler_par_puissance(c, donnees, cle, nom_de_fichier, controle):
@@ -789,7 +842,8 @@ def _controler_manifeste(c, manifeste, dossier, presents, tables):
             c.ko("partie.nature", "%r attendu : seule une partie 100 %% bots est admise" % NATURE)
     if ("repetee" in manifeste) != (REPETEE in presents):  # le résumé et son bloc vont ensemble
         c.ko("repetee", "bloc sans %s dans le dossier" % REPETEE if "repetee" in manifeste
-             else "%s est dans le dossier sans son bloc (date, SHA, commande, relevés d'origine)" % REPETEE)
+             else "%s est dans le dossier sans son bloc (date, SHA, commande, relevés d'origine) : supprimer ce "
+             "fichier, ou restaurer le manifeste et le résumé depuis git" % REPETEE)
     for cle, bloc in (("capture", capture), ("attendus", manifeste.get("attendus")), ("repetee", manifeste.get("repetee"))):
         if cle != "capture" and cle not in manifeste:
             continue
@@ -1183,8 +1237,8 @@ def fichiers_de_releves(chemins, sauf=()):
 def reduire_fichiers(chemins, recherche="A", tirage=0, a_sec=False, partie=None, sauf=()):
     """{phase: {puissance: table}} des relevés donnés, une table par position ; rend aussi les noms des fichiers écartés par `sauf`.
 
-    Lève Refus, qui nomme le fichier et la ligne : relevé illisible ou d'une forme inattendue, nombre non fini
-    dans une table, position d'un relevé retenu qui n'est pas une phase et une puissance (`null` compris),
+    Lève Refus, qui nomme le fichier et la ligne : relevé illisible ou d'une forme inattendue, numéro de tirage
+    qui n'est pas un entier positif ou nul (reduire_releve), nombre non fini dans une table, position d'un relevé retenu qui n'est pas une phase et une puissance (`null` compris),
     relevé retenu d'une autre partie que `partie` (None : non comparé), deux relevés retenus (recherche
     `recherche`, tirage `tirage`) pour une même position, dans deux fichiers ou dans un seul (le message nomme
     les deux : aucun ne l'emporte, on en écarte un par `sauf`), aucune table retenue. Les autres relevés d'une
@@ -1240,7 +1294,7 @@ def main(argv=None):
     r.add_argument("--sauf", metavar="MOTIF", action="append", help="écarte les fichiers de ce nom (répétable)")
     r.add_argument("--historique", required=True, help="historique des ordres (capture_reference.py historique)")
     r.add_argument("--vers", required=True, help="dossier du jeu, vide ou absent")
-    r.add_argument("--recherche", default="A")
+    r.add_argument("--recherche", default="A", help="type de recherche retenu : A seule est admise (le jeu est sans engagement)")
     r.add_argument("--tirage", type=int, default=0)
     r.add_argument("--partie", type=_numero_de_partie, required=True, help="numéro local de la partie source (entier positif ou nul)")
     r.add_argument("--creee-le", required=True, help="date de création de la partie source")
@@ -1277,6 +1331,10 @@ def main(argv=None):
         return 1 if violations else 0
     if args.action == "reduire":
         try:
+            if args.recherche != "A":  # avant toute lecture : le contrôle final la refuserait, fichiers écrits (#40)
+                raise Refus("--recherche %s : le jeu d'essai ne reçoit que des tables de recherches A, sans engagement "
+                            "(avec engagement, le renfort peut déplacer la probabilité d'action_values, que le contrôle "
+                            "compare à celle de prior_policy : I3) ; rien n'est lu ni écrit" % args.recherche[:40])
             if args.identite:
                 args.date, args.sha, args.image = lire_identite(args.identite)
             if None in (args.date, args.sha, args.image):
@@ -1311,10 +1369,10 @@ def main(argv=None):
             if not isinstance(manifeste, dict):
                 raise Refus("%s : objet attendu, %s trouvé" % (dossier / MANIFESTE, type(manifeste).__name__))
             refuser_resume_retouche(dossier, manifeste)
+            ecrire_manifeste(dossier, manifeste)
         except Refus as e:
             print("REFUS : %s" % e, file=sys.stderr)
             return 2
-        ecrire_manifeste(dossier, manifeste)
         return 0
     p.print_help()
     return 2

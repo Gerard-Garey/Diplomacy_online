@@ -403,7 +403,7 @@ DECALAGES = {"ENGLAND": 0.10, "FRANCE": 0.0}  # deux positions aux valeurs disti
 def releve(entree, puissance, tirage, recherche="A", game_id=9, engagements=()):
     """Une ligne de relevé de rejeu_moteur.py, réduite à ce que lisent bruit_valeurs.lire_releves et la couche R."""
     return {
-        "mesure": "M1", "a_sec": False, "game_id": game_id, "phase": "S1901M", "puissance": puissance, "tirage": tirage,
+        "mesure": "M1", "mode": "engagements", "a_sec": False, "game_id": game_id, "phase": "S1901M", "puissance": puissance, "tirage": tirage,
         "recherche": recherche, "engagements_retenus_par_le_moteur": list(engagements), "entree": entree,
         "appels_export": 1, "controles": copy.deepcopy(CONTROLES),
     }
@@ -559,6 +559,112 @@ class Commandes(AvecDossiers):
         code, _sortie, erreur = self.resumer()
         self.assertEqual((code, erreur), (0, ""))
         self.assertEqual(reference_jeu.controler(self.jeu), [])
+
+    def etat_du_jeu(self):
+        """Octets de chaque fichier du jeu, fichiers temporaires d'écriture compris (fichiers_du_jeu les liste)."""
+        return {f: (self.jeu / f).read_bytes() for f in reference_jeu.fichiers_du_jeu(self.jeu)}
+
+    def test_resumer_interrompu_ou_en_echec_d_ecriture_laisse_le_jeu_inchange(self):
+        # #40 : la remise ne couvrait que le refus du contrôle. Un échec d'écriture du manifeste (disque plein) laissait
+        # le résumé sans son bloc ; une interruption pendant le contrôle laissait le résumé et son manifeste, entérinés.
+        avant = self.etat_du_jeu()
+        for nom, cible, erreur in (
+                ("échec d'écriture du manifeste", "ecrire_manifeste", OSError(28, "No space left on device")),
+                ("interruption pendant le contrôle", "controler", KeyboardInterrupt())):
+            with self.subTest(nom):
+                # Le contrôle d'avant l'écriture (lire_reference) passe ; l'erreur vient à l'appel qui suit l'écriture
+                # du résumé, ou au contrôle final.
+                vraie, appels = getattr(reference_jeu, cible), []
+
+                def doublure(*arguments, vraie=vraie, appels=appels, erreur=erreur, cible=cible):
+                    appels.append(cible)
+                    if cible == "controler" and len(appels) == 1:
+                        return vraie(*arguments)
+                    self.assertTrue((self.jeu / reference_jeu.REPETEE).exists())  # le résumé est déjà écrit
+                    raise erreur
+
+                with mock.patch.object(reference_jeu, cible, side_effect=doublure), self.assertRaises(type(erreur)):
+                    self.resumer()
+                self.assertEqual(appels, [cible] * (2 if cible == "controler" else 1))
+                self.assertEqual(self.etat_du_jeu(), avant)
+                self.assertEqual(reference_jeu.controler(self.jeu), [])
+        # Interrompue pendant l'écriture même du manifeste, après le fichier temporaire : ni manifeste tronqué, ni
+        # fichier temporaire laissé, résumé retiré.
+        with mock.patch.object(reference_jeu.os, "replace", side_effect=KeyboardInterrupt()), self.assertRaises(KeyboardInterrupt):
+            self.resumer()
+        self.assertEqual(self.etat_du_jeu(), avant)
+        code, _sortie, erreur = self.resumer()
+        self.assertEqual((code, erreur), (0, ""))
+
+    def test_une_remise_interrompue_laisse_un_manifeste_entier(self):
+        # Le contrôle refuse, puis la remise du manifeste est interrompue avant son remplacement : le manifeste reste
+        # entier (celui que `resumer` venait d'écrire, avec le résumé), et le fichier temporaire est retiré.
+        avant = self.etat_du_jeu()
+        remplacer = os.replace
+        appels = []
+
+        def replace(source, destination):
+            appels.append(Path(destination).name)
+            if len(appels) == 3:  # résumé, manifeste, puis la remise du manifeste
+                raise KeyboardInterrupt()
+            remplacer(source, destination)
+
+        controler = reference_jeu.controler
+        verdicts = iter(([], ["violation fabriquée"]))  # le contrôle d'avant l'écriture passe, le contrôle final refuse
+        with mock.patch.object(reference_jeu, "controler", side_effect=lambda dossier: next(verdicts) or controler(dossier)), \
+                mock.patch.object(reference_jeu.os, "replace", side_effect=replace), self.assertRaises(KeyboardInterrupt):
+            self.resumer()
+        self.assertEqual(appels, [reference_jeu.REPETEE, "manifeste.json", "manifeste.json"])
+        apres = self.etat_du_jeu()
+        self.assertEqual(sorted(apres), sorted(list(avant) + [reference_jeu.REPETEE]))
+        self.assertIn("repetee", reference_jeu.charger_json(apres["manifeste.json"].decode("utf-8")))
+        self.assertEqual(reference_jeu.controler(self.jeu), [])
+
+    def test_lire_lot_refuse_un_type_de_recherche_qui_n_est_ni_a_ni_b(self):
+        # #40 : une ligne de type C (produite par le mode --incremental de rejeu_moteur.py), ou d'un type inconnu, entrait dans le lot
+        # sans être lue ni comme A ni comme B. Sur la recherche B du tirage 0, puis sur la recherche A du tirage 1.
+        for i, (ligne, valeur) in enumerate(((1, "C"), (2, "a"), (1, None))):
+            with self.subTest(valeur=valeur):
+                lignes = self.lignes(self.releves, "FRANCE")
+                lignes[ligne]["recherche"] = valeur
+                lot = self.ecrire("type_%d" % i, {"FRANCE": lignes})
+                self.assertEqual(self.refus_de_lecture(lot), "%s:%d (S1901M FRANCE, recherche %s) : type de recherche %r ; A ou "
+                                 "B attendu (la recherche C, produite par le mode --incremental de rejeu_moteur.py, n'entre "
+                                 "pas dans un lot)"
+                                 % (lot / "m1_9_S1901M_FRANCE_engagements_0.jsonl", ligne + 1, valeur, valeur))
+        lot = self.ecrire("type_c", {p: self.lignes(self.releves, p) for p in PUISSANCES})
+        fichier = lot / "m1_9_S1901M_FRANCE_engagements_0.jsonl"
+        lignes = self.lignes(lot, "FRANCE")
+        lignes[1]["recherche"] = "C"
+        fichier.write_text("".join(json.dumps(ligne) + "\n" for ligne in lignes), encoding="utf-8")
+        self.refus_des_deux_commandes(
+            lot, "%s:2 (S1901M FRANCE, recherche C) : type de recherche 'C' ; A ou B attendu (la recherche C, produite par le "
+            "mode --incremental de rejeu_moteur.py, n'entre pas dans un lot)" % fichier)
+
+    def test_lire_lot_refuse_un_releve_du_mode_incremental(self):
+        # #40, avis d'expert-cicero : un fichier produit par le mode --incremental, interrompu entre la recherche B et la
+        # recherche C, n'a que des lignes A et B ; seul son champ `mode` le distingue. Refusé, ainsi qu'un mode absent.
+        fichier_de = "m1_9_S1901M_FRANCE_engagements_0.jsonl"
+        for i, (ligne, valeur, affiche) in enumerate(((0, "incremental", "'incremental'"), (3, "incremental", "'incremental'"),
+                                                      (1, None, "absent"))):
+            with self.subTest(ligne=ligne, valeur=valeur):
+                lignes = self.lignes(self.releves, "FRANCE")
+                if valeur is None:
+                    del lignes[ligne]["mode"]
+                else:
+                    lignes[ligne]["mode"] = valeur
+                lot = self.ecrire("mode_%d" % i, {"FRANCE": lignes})
+                self.assertEqual(self.refus_de_lecture(lot), "%s:%d (S1901M FRANCE, recherche %s) : mode %s ; 'engagements' "
+                                 "attendu (un relevé produit par le mode --incremental de rejeu_moteur.py n'entre pas dans "
+                                 "un lot)" % (lot / fichier_de, ligne + 1, "AB"[ligne % 2], affiche))
+        # Tout le fichier en mode incremental, A et B seulement : refusé par `resumer` comme par `comparer`.
+        par_puissance = {p: self.lignes(self.releves, p) for p in PUISSANCES}
+        for ligne in par_puissance["FRANCE"]:
+            ligne["mode"] = "incremental"
+        lot = self.ecrire("incremental", par_puissance)
+        self.refus_des_deux_commandes(
+            lot, "%s:1 (S1901M FRANCE, recherche A) : mode 'incremental' ; 'engagements' attendu (un relevé produit par le "
+            "mode --incremental de rejeu_moteur.py n'entre pas dans un lot)" % (lot / fichier_de))
 
     def test_resumer_refuse_deux_fichiers_pour_une_position(self):
         double = self.releves / "m1_9_S1901M_FRANCE_engagements-passe2_0.jsonl"
@@ -1069,6 +1175,9 @@ class ControleDuJeu(AvecDossiers):
 
     def test_le_resume_et_son_bloc_vont_ensemble(self):
         self.une("repetee.json est dans le dossier sans son bloc", manifeste=lambda m: m.pop("repetee"))
+        # #40 : le refus nomme la réparation.
+        self.une("sans son bloc (date, SHA, commande, relevés d'origine) : supprimer ce fichier, ou restaurer le manifeste "
+                 "et le résumé depuis git", manifeste=lambda m: m.pop("repetee"))
         self.une("bloc sans repetee.json dans le dossier", sans_fichier=True)
         # Ni l'un ni l'autre : le jeu d'avant le résumé, conforme.
         self.assertEqual(self.violations(manifeste=lambda m: m.pop("repetee"), sans_fichier=True), [])
@@ -1112,12 +1221,39 @@ class ControleDuJeu(AvecDossiers):
         reference_jeu.ecrire_manifeste(self.jeu, json.loads(self.manifeste))
         self.assertEqual(reference_jeu.controler(self.jeu), [])
 
-    def test_manifeste_n_enterine_pas_un_resume_sorti_puis_remis(self):
-        # #40 : le résumé sorti du dossier, `manifeste` (le fichier n'est plus noté, le bloc reste), le résumé
-        # retouché remis, `manifeste`. Aucune édition du manifeste à la main ; le second appel entérinait la retouche.
+    def test_manifeste_refuse_un_bloc_sans_resume(self):
+        # #40, décision du mainteneur du 2026-11-07 : le résumé sorti du dossier, le bloc « repetee » resté au
+        # manifeste. Le premier appel de `manifeste` est refusé, rien n'est écrit ; avant, il rendait 0 et écrivait un
+        # manifeste qui ne notait plus le résumé, que le contrôle refusait (« bloc sans repetee.json »).
         fichier = self.jeu / reference_jeu.REPETEE
         fichier.unlink()
+        code, erreur = self.manifeste_du_jeu()
+        self.assertEqual(code, 2)
+        self.assertEqual(erreur, "REFUS : le manifeste porte le bloc « repetee » mais %s n'est pas dans le dossier : refaire "
+                         "le manifeste sans le résumé donnerait un jeu que le contrôle refuse (bloc sans fichier), rien "
+                         "n'est écrit. Restaurer le résumé depuis git, ou retirer aussi le bloc « repetee » du manifeste "
+                         "(deux des trois temps qui refont le résumé) avant de relancer `manifeste`\n" % fichier)
+        self.assertEqual((self.jeu / "manifeste.json").read_text(encoding="utf-8"), self.manifeste)
+        self.assertIn("manifeste.json : repetee : bloc sans repetee.json dans le dossier", reference_jeu.controler(self.jeu))
+        # Les deux sorties que le refus donne : le résumé restauré, ou le bloc retiré aussi.
+        fichier.write_text(self.resume, encoding="utf-8")
         self.assertEqual(self.manifeste_du_jeu(), (0, ""))
+        self.assertEqual(reference_jeu.controler(self.jeu), [])
+        self.assertEqual((self.jeu / "manifeste.json").read_text(encoding="utf-8"), self.manifeste)
+        self.retirer_le_resume()
+        self.assertEqual(reference_jeu.controler(self.jeu), [])
+
+    def test_manifeste_n_enterine_pas_un_resume_sorti_puis_remis(self):
+        # #40 : le résumé sorti du dossier, `manifeste`, le résumé retouché remis, `manifeste`. Le premier appel est
+        # refusé (test précédent) ; le manifeste qu'il écrivait -- le bloc sans la note du fichier -- n'arrive plus que
+        # par une édition à la main, et le second appel refuse encore le résumé remis.
+        fichier = self.jeu / reference_jeu.REPETEE
+        fichier.unlink()
+        self.assertEqual(self.manifeste_du_jeu()[0], 2)
+        sans_note = json.loads(self.manifeste)
+        sans_note["fichiers"] = [f for f in sans_note["fichiers"] if f["chemin"] != reference_jeu.REPETEE]
+        sans_note["taille_octets"] = sum(f["octets"] for f in sans_note["fichiers"])
+        (self.jeu / "manifeste.json").write_text(json.dumps(sans_note, ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
         sans_note = (self.jeu / "manifeste.json").read_text(encoding="utf-8")
         self.assertIn("repetee", json.loads(sans_note))
         self.assertNotIn(reference_jeu.REPETEE, [f["chemin"] for f in json.loads(sans_note)["fichiers"]])
@@ -1141,6 +1277,31 @@ class ControleDuJeu(AvecDossiers):
         self.assertEqual(self.manifeste_du_jeu(), (0, ""))
         self.assertEqual(reference_jeu.controler(self.jeu), [])
         self.assertEqual((self.jeu / "manifeste.json").read_text(encoding="utf-8"), self.manifeste)
+
+    def test_manifeste_refuse_un_fichier_temporaire_laisse_par_un_arret_brutal(self):
+        # #40, constat C1 de l'audit : après un SIGKILL pendant ecrire_octets, `.manifeste.json.ecriture` reste. La
+        # commande `manifeste` le listait, puis le renommait en écrivant le manifeste : code 0, et un manifeste qui cite
+        # un fichier disparu. Refus avant toute écriture, qui nomme le fichier.
+        temporaire = self.jeu / ".manifeste.json.ecriture"
+        temporaire.write_text('{"tronqué', encoding="utf-8")
+        code, erreur = self.manifeste_du_jeu()
+        self.assertEqual(code, 2)
+        self.assertEqual(erreur, "REFUS : %s : fichier temporaire d'une écriture interrompue (arrêt brutal pendant "
+                         "ecrire_octets) : le retirer, puis vérifier le fichier qu'il devait remplacer (le restaurer depuis "
+                         "git au besoin) ; le manifeste n'est pas écrit\n" % temporaire)
+        self.assertEqual((self.jeu / "manifeste.json").read_text(encoding="utf-8"), self.manifeste)
+        self.assertTrue(temporaire.exists())
+        # Un fichier temporaire d'un sous-dossier aussi, par la fonction elle-même.
+        autre = self.jeu / "tables" / ".S1901M.json.ecriture"
+        autre.write_text("", encoding="utf-8")
+        with self.assertRaises(reference_jeu.Refus) as refus:
+            reference_jeu.ecrire_manifeste(self.jeu, json.loads(self.manifeste))
+        self.assertIn("%s, %s : fichier temporaire" % (temporaire, autre), str(refus.exception))
+        # Retirés, la commande passe et le jeu est conforme.
+        temporaire.unlink()
+        autre.unlink()
+        self.assertEqual(self.manifeste_du_jeu(), (0, ""))
+        self.assertEqual(reference_jeu.controler(self.jeu), [])
 
     def manifeste_du_jeu(self, dossier=None):
         """(code, sortie d'erreur) de la commande `manifeste`."""

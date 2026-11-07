@@ -114,6 +114,10 @@ VERDICTS = ("identique", "dans la tolérance", "hors tolérance", "lot invalide"
 DECISIONS = ("pas de régression", "régression", "non concluant", "lot invalide")
 CODES = {"pas de régression": 0, "régression": 1, "non concluant": 2, "lot invalide": 2}
 COMMANDE_RESUMER = "python3 tests/reference_couche_r.py resumer <relevés> --vers <dossier>"
+# Les types de recherche d'un lot : A sans engagement, B avec (tests/mesure/bruit_valeurs.py) ; tout autre est refusé (#40).
+TYPES_DE_RECHERCHE = (bruit_valeurs.TYPE_SANS_ENGAGEMENT, bruit_valeurs.TYPE_AVEC_ENGAGEMENT)
+# Le mode de rejeu_moteur.py (clé `mode` de chaque ligne, rejeu_moteur.py:454) ; « incremental » est refusé (#40).
+MODE_DU_LOT = "engagements"
 # Sensibilité et fausses alertes : mesures d'expert-cicero du 2026-10-10 (spécification de la couche R, § 2.4),
 # sur les 43 relevés de la campagne de capture, par un script d'étalonnage non versionné ; elles ne se
 # recalculent pas d'un lot, et chaque phrase qui en cite un chiffre le dit.
@@ -497,8 +501,8 @@ def lire_lot(dossier, order_loc, seulement=None, sauf=()):
     bloc search de chaque ligne, A et B ; "reperes" : le type de recherche et le numéro de tirage de
     chacune de ces lignes ; "structure" : contrôles de relevé en échec ; "lignes", "lignes_b",
     "fichier"}}. La lecture des tables est celle de bruit_valeurs.lire_releves ; les contrôles
-    (`controles`, `appels_export`) sont relus ligne à ligne. Chaque ligne de recherche, A ou B, porte un
-    game_id entier et un numéro de tirage entier, positif ou nul, écrit une seule fois par type de
+    (`controles`, `appels_export`) sont relus ligne à ligne. Chaque ligne de recherche est de type A ou B,
+    du mode « engagements » de rejeu_moteur.py (#40), et porte un game_id entier et un numéro de tirage entier, positif ou nul, écrit une seule fois par type de
     recherche dans sa position (#37) : le numéro porte l'identité de la référence (le tirage 0 est la
     table figée du jeu) et apparie la recherche B à la recherche A de son tirage. Lève ErreurLot (ou
     bruit_valeurs.ErreurReleve) sur un lot inutilisable."""
@@ -545,6 +549,13 @@ def lire_lot(dossier, order_loc, seulement=None, sauf=()):
             numero = releve["tirage"]
             if not reference_jeu._entier(numero):  # le prédicat du game_id : ni booléen, ni flottant, ni chaîne
                 raise ErreurLot("%s : numéro de tirage %r ; un entier positif ou nul est attendu" % (ou, numero))
+            if releve["recherche"] not in TYPES_DE_RECHERCHE:
+                raise ErreurLot("%s : type de recherche %r ; %s attendu (la recherche C, produite par le mode --incremental "
+                                "de rejeu_moteur.py, n'entre pas dans un lot)" % (ou, releve["recherche"], " ou ".join(TYPES_DE_RECHERCHE)))
+            if releve.get("mode") != MODE_DU_LOT:  # un fichier --incremental interrompu avant sa recherche C n'a que A et B
+                raise ErreurLot("%s : mode %s ; %r attendu (un relevé produit par le mode --incremental de rejeu_moteur.py "
+                                "n'entre pas dans un lot)" % (ou, repr(releve["mode"])[:40] if "mode" in releve else "absent",
+                                                               MODE_DU_LOT))
             repere = (str(releve["recherche"]), numero)
             if repere in p["reperes"]:
                 raise ErreurLot("%s : tirage %d écrit deux fois pour la recherche %s" % (ou, numero, repere[0]))
@@ -784,6 +795,18 @@ def divergences_de_recherche(positions, retenues):
     return lignes, divergences
 
 
+def _remettre(dossier, manifeste_d_avant):
+    """Rend le jeu d'avant `resumer` : le manifeste d'abord, octet pour octet, puis le résumé retiré.
+
+    Chaque fichier s'écrit d'un coup (reference_jeu.ecrire_octets) : une remise interrompue laisse un manifeste
+    entier, l'ancien ou le nouveau, jamais tronqué. Les deux fichiers ne changent pas ensemble : interrompue entre
+    les deux, elle laisse le manifeste d'avant et un résumé qu'il n'a pas, que le contrôle refuse (« sans son bloc »).
+    """
+    reference_jeu.ecrire_octets(dossier / reference_jeu.MANIFESTE, manifeste_d_avant)
+    if (dossier / reference_jeu.REPETEE).exists():
+        (dossier / reference_jeu.REPETEE).unlink()
+
+
 def commande_resumer(args, order_loc):
     dossier = Path(args.vers)
     jeu, deja = lire_reference(dossier)
@@ -834,21 +857,26 @@ def commande_resumer(args, order_loc):
                             % (" et ".join(couche_d.MESURES), couche_d.HORS_MESURES, len(modifies), modifies[0].strip()))
         sha += "-modifie"
     fichiers = sorted({positions[p]["fichier"] for p in retenues})
-    manifeste_d_avant = (dossier / reference_jeu.MANIFESTE).read_bytes()  # remis tel quel si le contrôle refuse (#40)
-    reference_jeu.ecrire_json(dossier / reference_jeu.REPETEE, resume)
-    reference_jeu.ecrire_manifeste(dossier, dict(jeu["manifeste"], repetee={
+    bloc = {
         "date": args.date or time.strftime("%Y-%m-%d"), "sha_code": sha, "commande": COMMANDE_RESUMER,
         "releves": {
             "fichiers": len(fichiers), "recherches": sum(len(positions[p]["A"]) for p in retenues),
             "sha256": empreinte_des_releves(args.releves, fichiers),
         },
-    }))
-    violations = reference_jeu.controler(dossier)
+    }
+    manifeste_d_avant = (dossier / reference_jeu.MANIFESTE).read_bytes()  # remis tel quel si le contrôle refuse (#40)
+    try:
+        reference_jeu.ecrire_json(dossier / reference_jeu.REPETEE, resume)
+        reference_jeu.ecrire_manifeste(dossier, dict(jeu["manifeste"], repetee=bloc))
+        violations = reference_jeu.controler(dossier)
+    except BaseException:
+        # Échec d'écriture ou interruption (KeyboardInterrupt compris) entre le résumé et le manifeste : même remise.
+        _remettre(dossier, manifeste_d_avant)
+        raise
     if violations:
         # Le jeu passait son contrôle avant l'écriture (lire_reference) : on le rend tel qu'il était, octet pour
         # octet, plutôt qu'un jeu refusé par son propre contrôle et qu'un `resumer` relancé refuserait (« existe déjà »).
-        (dossier / reference_jeu.REPETEE).unlink()
-        (dossier / reference_jeu.MANIFESTE).write_bytes(manifeste_d_avant)
+        _remettre(dossier, manifeste_d_avant)
         raise ErreurLot("le jeu, avec ce résumé, ne passe pas son contrôle (%d violation(s)) : le résumé est retiré et le "
                         "manifeste remis tel qu'il était, rien n'est gardé.\n  %s" % (len(violations), "\n  ".join(violations)))
     print("Résumé de %d position(s) écrit dans %s (%d octets ; code %s)." % (

@@ -14,6 +14,7 @@ import copy
 import io
 import itertools
 import json
+import math
 import os
 import random
 import re
@@ -411,6 +412,42 @@ class Reducteur(AvecJeu):
     def texte(self, *lignes):
         return "".join(json.dumps(ligne) + "\n" for ligne in lignes or self.lignes)
 
+    def test_recherche_b_refusee_d_emblee(self):
+        # #40, décision du mainteneur du 2026-11-07 : --recherche B était refusé par le contrôle final, après
+        # l'écriture du jeu (376 lignes de refus et 6 fichiers laissés, sur les relevés du 2026-10-10). Il l'est
+        # avant toute lecture : relevés et historique absents ne changent rien au refus.
+        attendu = ("REFUS : --recherche %s : le jeu d'essai ne reçoit que des tables de recherches A, sans engagement (avec "
+                   "engagement, le renfort peut déplacer la probabilité d'action_values, que le contrôle compare à celle "
+                   "de prior_policy : I3) ; rien n'est lu ni écrit\n")
+        for recherche in ("B", "C"):
+            with self.subTest(recherche=recherche):
+                self.assertEqual(self.refus(self.texte(), "--recherche", recherche), attendu % recherche)
+        self.assertEqual(self.refus([self.racine / "absent.jsonl"], "--recherche", "B", historique=self.racine / "absent.json"),
+                         attendu % "B")
+
+    def test_un_numero_de_tirage_qui_n_est_pas_un_entier_est_refuse(self):
+        # #40 (constat de lecture, mesuré) : False et 0.0 valent 0 pour Python, et reduire_releve les retenait comme
+        # le tirage 0 ; True et 1.0, comme le tirage 1. Refusés, comme dans lire_lot (#37), retenus ou non.
+        ligne = self.lignes[0]
+        for valeur, affichee in ((False, "False"), (0.0, "0.0"), (True, "True"), (1.0, "1.0"), ("0", "'0'"), (None, "None"),
+                                 (-1, "-1")):
+            for recherche in ("A", "B"):
+                with self.subTest(valeur=valeur, recherche=recherche), self.assertRaises(reference_jeu.Refus) as refus:
+                    reference_jeu.reduire_releve(dict(ligne, tirage=valeur, recherche=recherche))
+                self.assertEqual(str(refus.exception), "numéro de tirage %s ; un entier positif ou nul est attendu, tel que "
+                                 "l'écrit rejeu_moteur.py" % affichee)
+        sans = dict(ligne)
+        del sans["tirage"]
+        with self.assertRaises(reference_jeu.Refus) as refus:
+            reference_jeu.reduire_releve(sans)
+        self.assertIn("numéro de tirage absent", str(refus.exception))
+        # Par la commande : code 2, le fichier et la ligne nommés, rien d'écrit.
+        self.assertEqual(self.refus(self.texte(self.lignes[0], dict(self.lignes[1], tirage=False))),
+                         "REFUS : m1_9_releves.jsonl:2 : numéro de tirage False ; un entier positif ou nul est attendu, tel "
+                         "que l'écrit rejeu_moteur.py\n")
+        # Une ligne de comparaison n'est pas une recherche : elle reste écartée sans être lue.
+        self.assertIsNone(reference_jeu.reduire_releve({"mesure": "M1", "comparaison": {}, "tirage": 0.0})[0])
+
     def test_refus_d_un_releve_tronque_ou_d_une_ligne_invalide(self):
         entier = self.texte()
         for nom, texte, ligne in (
@@ -671,6 +708,46 @@ class Reducteur(AvecJeu):
 # ---------------------------------------------------------------------------
 # Contrôle (ADR 0006, décision 3) : un test par violation
 # ---------------------------------------------------------------------------
+
+class Ecriture(unittest.TestCase):
+    """reference_jeu.ecrire_octets (#40) : un fichier s'écrit d'un coup, ou pas du tout."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.dossier = Path(tmp.name)
+        self.fichier = self.dossier / "manifeste.json"
+
+    def test_ecriture(self):
+        reference_jeu.ecrire_octets(self.fichier, b"{}\n")
+        reference_jeu.ecrire_octets(self.fichier, b'{"a":1}\n')
+        self.assertEqual(self.fichier.read_bytes(), b'{"a":1}\n')
+        self.assertEqual(sorted(f.name for f in self.dossier.iterdir()), ["manifeste.json"])
+        # Les droits sont ceux d'un fichier ouvert en écriture (masque du processus), comme avec write_text.
+        temoin = self.dossier / "temoin"
+        temoin.write_bytes(b"")
+        self.assertEqual(self.fichier.stat().st_mode, temoin.stat().st_mode)
+
+    def test_echec_ou_interruption(self):
+        # Avant le remplacement, une erreur ou une interruption laisse le fichier d'avant, et retire le temporaire ;
+        # un fichier absent le reste.
+        self.fichier.write_bytes(b"avant\n")
+        for cible, erreur in (("fsync", OSError(28, "No space left on device")), ("replace", KeyboardInterrupt())):
+            for chemin, attendu in ((self.fichier, b"avant\n"), (self.dossier / "absent.json", None)):
+                with self.subTest(cible=cible, chemin=chemin.name):
+                    with mock.patch.object(reference_jeu.os, cible, side_effect=erreur), self.assertRaises(type(erreur)):
+                        reference_jeu.ecrire_octets(chemin, b"apres\n")
+                    self.assertEqual(chemin.read_bytes() if chemin.exists() else None, attendu)
+                    self.assertEqual(sorted(f.name for f in self.dossier.iterdir()), ["manifeste.json"])
+
+    def test_ecrire_json_et_ecrire_manifeste_l_emploient(self):
+        with mock.patch.object(reference_jeu.os, "replace", side_effect=KeyboardInterrupt()):
+            with self.assertRaises(KeyboardInterrupt):
+                reference_jeu.ecrire_json(self.dossier / "tables" / "S1901M.json", {"phase": "S1901M"})
+            with self.assertRaises(KeyboardInterrupt):
+                reference_jeu.ecrire_manifeste(self.dossier, {"format": 1})
+        self.assertEqual(reference_jeu.fichiers_du_jeu(self.dossier), [])
+
 
 class Controle(AvecJeu):
     def test_dossier_absent(self):
@@ -1062,12 +1139,55 @@ class Coherence(AvecJeu):
         # Le refus dit sa portée : l'égalité est celle d'une recherche sans engagement.
         self.une_violation("%s.action_values[%d].prob" % (self.ICI, rang), "I3", "prior_policy[10]",
                            "ne vaut que pour une table de recherche sans engagement (recherche A)")
+        # #40 : le refus dit le domaine de la tolérance (le score, pas la probabilité), et ne dit pas que toute table
+        # avec engagement est refusée : le renfort *peut* déplacer la probabilité.
+        self.une_violation("I3", "L'égalité est exacte (la tolérance de 1e-12 est celle du score, I1)", "le renfort peut déplacer")
 
     def test_i3_action_que_la_politique_d_avant_ne_designe_plus(self):
         rang = self.table()["export_plans"]["prior_policy"][-1]["action"]
         violations = self.retoucher(lambda e: e["prior_policy"].pop())
         self.assertEqual((len(violations), self.invariants(violations)), (1, ["I3"]))
-        self.une_violation("%s.action_values[%d].prob" % (self.ICI, rang), "aucune ligne de prior_policy ne désigne cette action")
+        self.une_violation("%s.action_values[%d].prob" % (self.ICI, rang), "aucune ligne de prior_policy ne désigne cette action",
+                           "chaque action d'action_values y a sa ligne (ligne retirée, ou rang changé)")
+        # #40 : c'est la forme de prior_policy qui est en cause, pas une probabilité : le refus ne parle pas d'engagement.
+        self.assertNotIn("engagement", violations[0])
+
+    def test_i3_action_designee_deux_fois(self):
+        # #40 : une ligne de prior_policy recopiée -- même rang, même probabilité -- passait le contrôle.
+        premiere = self.table()["export_plans"]["prior_policy"][0]
+        violations = self.retoucher(lambda e: e["prior_policy"].append(dict(e["prior_policy"][0])))
+        self.assertEqual((len(violations), self.invariants(violations)), (1, ["I3"]))
+        self.une_violation("%s.prior_policy[11].action" % self.ICI, "I3 : désigne l'action %d, déjà désignée par "
+                           "prior_policy[0] : une action a une seule ligne dans prior_policy (ligne en double)" % premiere["action"])
+        self.assertNotIn("engagement", violations[0])
+        # Désignée deux fois à deux probabilités : le doublon, et l'écart de probabilité de la seconde ligne.
+        violations = self.retoucher(lambda e: e["prior_policy"][-1].update(prob=e["prior_policy"][-1]["prob"] * 2))
+        self.assertEqual(len(violations), 2, violations)
+        self.une_violation("%s.action_values[%d].prob" % (self.ICI, premiere["action"]), "I3", "prior_policy[11]")
+
+    def test_i1_plancher_de_la_probabilite(self):
+        # #40 (réserve R1 d'expert-cicero) : sous 1e-6, le score est calculé à 1e-6 (br_corr_bilateral_search.py:339).
+        # Aucune donnée ne l'exerce (plus petite probabilité du jeu versionné : 1,27e-5) : action fabriquée à 1e-8, la
+        # dernière de la liste, au score le plus bas, sa ligne de prior_policy à la même probabilité.
+        arguments = self.table()["export_plans"]
+        derniere = len(arguments["action_values"]) - 1
+        coefficient = arguments["regularize_lambda"]
+        valeur = min(a["value"] for a in arguments["action_values"]) - 1.0
+
+        def sous_le_plancher(score):
+            def changement(e):
+                e["action_values"][derniere].update(value=valeur, prob=1e-8, score=score)
+                for ligne in e["prior_policy"]:
+                    if ligne.get("action") == derniere:
+                        ligne["prob"] = 1e-8
+            return changement
+
+        self.assertEqual(self.retoucher(sous_le_plancher(valeur + coefficient * math.log(1e-6))), [])
+        # Le score calculé sans le plancher est refusé : l'écart est lambda x ln(100).
+        violations = self.retoucher(sous_le_plancher(valeur + coefficient * math.log(1e-8)))
+        self.assertEqual((len(violations), self.invariants(violations)), (1, ["I1"]))
+        self.une_violation(self.ICI + ".action_values[%d].score" % derniere, "I1", "ln(max(prob, 1e-06))",
+                           "écart %.3g" % (coefficient * math.log(100)))
 
     def test_i3_refuse_un_jeu_de_recherches_avec_engagement(self):
         # Une table sur deux vient d'une recherche avec engagement : le renfort y a déplacé la probabilité
